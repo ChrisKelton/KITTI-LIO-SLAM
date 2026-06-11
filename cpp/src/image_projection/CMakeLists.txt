@@ -25,8 +25,9 @@ include_directories(include/image_projection ${PCL_INCLUDE_DIRS} ${OpenCV_INCLUD
 
 add_executable(image_projection
     src/main.cpp
-        include/image_projection/ImageProjectionNode.h
-        include/image_projection/utils/Config.h
+    src/ImageProjectionNode.cpp
+    include/image_projection/ImageProjectionNode.h
+    include/image_projection/utils/Config.h
 )
 
 ament_target_dependencies(image_projection
