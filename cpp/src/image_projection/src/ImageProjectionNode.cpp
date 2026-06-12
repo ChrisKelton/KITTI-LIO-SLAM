@@ -81,8 +81,8 @@ void ImageProjectionNode::setup_config() {
     config->odomTopic        = this->declare_parameter("odomTopic",         "odometry/imu");
     config->pointCloudTopic  = this->declare_parameter("pointCloudTopic",   "points_raw");
 
-    config->N_SCAN       = static_cast<uint>(this->declare_parameter<int>("N_SCAN",        64));
-    config->Horizon_SCAN = static_cast<uint>(this->declare_parameter<int>("Horizon_SCAN", 4096));
+    config->N_SCAN       = static_cast<uint32_t>(this->declare_parameter<int>("N_SCAN",        64));
+    config->Horizon_SCAN = static_cast<uint32_t>(this->declare_parameter<int>("Horizon_SCAN", 4096));
 
     config->extRotV    = this->declare_parameter<std::vector<float>>("extRotV",    std::vector<float>());
     config->extRotRPYV = this->declare_parameter<std::vector<float>>("extRotRPYV", std::vector<float>());
@@ -92,9 +92,9 @@ void ImageProjectionNode::setup_config() {
 
     config->lidarMinRange    = this->declare_parameter<float>("lidarMinRange",  1.0);
     config->lidarMaxRange    = this->declare_parameter<float>("lidarMaxRange",  400.0);
-    config->downsampleRate   = static_cast<uint>(this->declare_parameter<int>("downsample_rate", 1));
+    config->downsampleRate   = static_cast<uint32_t>(this->declare_parameter<int>("downsample_rate", 1));
     // Must match the value used in featureExtraction for curvature computation.
-    config->lidarCurvatureFeatureExtractionNeighbors = static_cast<uint>(
+    config->lidarCurvatureFeatureExtractionNeighbors = static_cast<uint32_t>(
         this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5));
 }
 
@@ -112,8 +112,8 @@ void ImageProjectionNode::setup_subpub() {
         std::bind(&ImageProjectionNode::cloudHandler, this, std::placeholders::_1)
     );
 
-    pubExtractedCloud  = this->create_publisher<sensor_msgs::msg::PointCloud2>("deskew/cloud_deskewed", 1);
-    pubPointCloudInfo  = this->create_publisher<slam_msgs::msg::CloudInfo>("deskew/cloud_info", 1);
+    pubExtractedCloud  = this->create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/deskew/cloud_deskewed", 1);
+    pubPointCloudInfo  = this->create_publisher<slam_msgs::msg::CloudInfo>("lio_sam/deskew/cloud_info", 1);
 }
 
 void ImageProjectionNode::initialize() {

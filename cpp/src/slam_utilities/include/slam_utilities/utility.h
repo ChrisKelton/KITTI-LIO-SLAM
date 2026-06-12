@@ -44,6 +44,7 @@ inline sensor_msgs::msg::Imu imuConverter(
     const rclcpp::Logger& logger
 ) {
     sensor_msgs::msg::Imu imu_out;
+    imu_out.header = imu_in.header;
     // rotate acceleration
     Eigen::Vector3d acc(imu_in.linear_acceleration.x, imu_in.linear_acceleration.y, imu_in.linear_acceleration.z);
     acc = extRot * acc;

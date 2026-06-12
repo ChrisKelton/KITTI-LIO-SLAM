@@ -3,150 +3,99 @@
 //
 #pragma once
 
-#ifndef IMU_STATE_H
-#define IMU_STATE_H
+#ifndef SLAM_UTILITIES_STATE_H
+#define SLAM_UTILITIES_STATE_H
+
+#include <iostream>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/navigation/ImuBias.h>
 
 #include <boost/archive/text_oarchive.hpp>
-#include <boost/archive/text_iarchive.hpp>  // Needed for deserialization
+#include <boost/archive/text_iarchive.hpp>
 
-namespace gtsam {
 
-typedef imuBias::ConstantBias Bias;
+namespace slam {
 
 class State {
   private:
-    Pose3 pose_;       // Rotation from global to IMU, Position of IMU in global
-    Vector3 velocity_; // Velocity of IMU in global
-    Bias bias_;        // Bias of IMU
+    gtsam::Pose3 pose_;
+    gtsam::Vector3 velocity_;
+    gtsam::imuBias::ConstantBias bias_;
 
     friend class boost::serialization::access;
+
   public:
-    // Default Constructor
-    State() : pose_(Pose3()), velocity_(Vector3()), bias_(Bias()) {}
+    State()
+        : pose_(gtsam::Pose3()),
+          velocity_(gtsam::Vector3::Zero()),
+          bias_(gtsam::imuBias::ConstantBias()) {}
 
-    // Copy Constructor
-    State(const State& state) {
-      this->pose_     = state.pose_;
-      this->velocity_ = state.velocity_;
-      this->bias_     = state.bias_;
-    }
+    State(const State& state)
+        : pose_(state.pose_), velocity_(state.velocity_), bias_(state.bias_) {}
 
-    // Constructor
-    State(const Pose3& pose, const Vector3& velocity, const Bias& bias) {
-      this->pose_     = pose;
-      this->velocity_ = velocity;
-      this->bias_     = bias;
-    }
+    State(const gtsam::Pose3& pose, const gtsam::Vector3& velocity, const gtsam::imuBias::ConstantBias& bias)
+        : pose_(pose), velocity_(velocity), bias_(bias) {}
 
-    // Set pose
-    void set_pose(const Pose3& pose) {
-      this->pose_ = pose;
-    }
+    void set_pose(const gtsam::Pose3& pose)                        { pose_     = pose; }
+    void set_velocity(const gtsam::Vector3& velocity)              { velocity_ = velocity; }
+    void set_bias(const gtsam::imuBias::ConstantBias& bias)        { bias_     = bias; }
 
-    // Set velocity
-    void set_velocity(const Vector3& velocity) {
-      this->velocity_ = velocity;
-    }
+    const gtsam::Pose3&                  pose()     const { return pose_; }
+    const gtsam::Vector3&                v()        const { return velocity_; }
+    const gtsam::Vector3&                velocity() const { return v(); }
+    const gtsam::imuBias::ConstantBias&  b()        const { return bias_; }
+    const gtsam::imuBias::ConstantBias&  bias()     const { return b(); }
 
-    // set_bias
-    void set_bias(const Bias& bias) {
-      this->bias_ = bias;
-    }
+    // Rotation as unit quaternion
+    gtsam::Quaternion q()          const { return pose_.rotation().toQuaternion(); }
+    gtsam::Quaternion quaternion() const { return q(); }
 
-    // Return pose as Pose3
-    const Pose3& pose() const {
-      return pose_;
-    }
+    // Translation
+    gtsam::Vector3 p()        const { return pose_.translation(); }
+    gtsam::Vector3 position() const { return p(); }
 
-    // Return velocity as Vector3
-    const Vector3& v() const {
-      return velocity_;
-    }
+    // Bias components
+    const gtsam::Vector3& ba() const { return bias_.accelerometer(); }
+    const gtsam::Vector3& bg() const { return bias_.gyroscope(); }
 
-    const Vector3& velocity() const {
-      return v();
-    }
-
-    // Return bias as Bias
-    const Bias& b() const {
-      return bias_;
-    }
-
-    const Bias& bias() const {
-      return b();
-    }
-
-    // Return rotation as Quaternion
-    Quaternion q() const {
-      return pose().rotation().toQuaternion();
-    }
-
-    Quaternion quaternion() const {
-      return q();
-    }
-
-    // Return translation as Vector3
-    Vector3 p() const {
-      return pose().translation();
-    }
-
-    Vector3 position() const {
-      return p();
-    }
-
-    // Return accelerometer bias as Vector3
-    const Vector3& ba() const {
-      return b().accelerometer();
-    }
-
-    // Return gyroscope bias as Vector3
-    const Vector3& bg() const {
-      return b().gyroscope();
-    }
-
-    /// How this node gets printed in the ostream
-    GTSAM_EXPORT
-    friend std::ostream &operator<<(std::ostream &os, const State& state) {
-        os << "[STATE]: q = " << std::fixed << state.q().x() << ", " << std::fixed << state.q().y() << ", "
-                              << std::fixed << state.q().z() << ", " << std::fixed << state.q().w() << " | ";
-        os << "p = "  << std::fixed << state.p()(0) << ", "  << std::fixed << state.p()(1)  << ", " << std::fixed << state.p()(2)  << " | ";
-        os << "v = "  << std::fixed << state.v()(0) << ", "  << std::fixed << state.v()(1)  << ", " << std::fixed << state.v()(2)  << " | ";
-        os << "ba = " << std::fixed << state.ba()(0) << ", " << std::fixed << state.ba()(1) << ", " << std::fixed << state.ba()(2) << " | ";
-        os << "bg = " << std::fixed << state.bg()(0) << ", " << std::fixed << state.bg()(1) << ", " << std::fixed << state.bg()(2);
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        os << std::fixed
+           << "[STATE]: q = " << state.q().x() << ", " << state.q().y() << ", "
+                               << state.q().z() << ", " << state.q().w() << " | "
+           << "p = "  << state.p()(0)  << ", " << state.p()(1)  << ", " << state.p()(2)  << " | "
+           << "v = "  << state.v()(0)  << ", " << state.v()(1)  << ", " << state.v()(2)  << " | "
+           << "ba = " << state.ba()(0) << ", " << state.ba()(1) << ", " << state.ba()(2) << " | "
+           << "bg = " << state.bg()(0) << ", " << state.bg()(1) << ", " << state.bg()(2);
         return os;
     }
 
-    /// Print function for this node
     void print(const std::string& s = "") const {
-      std::cout << s << *this << std::endl;
+        std::cout << s << *this << std::endl;
     }
 
     template<class Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-      ar& BOOST_SERIALIZATION_NVP(pose_);
-      ar& BOOST_SERIALIZATION_NVP(velocity_);
-      ar& BOOST_SERIALIZATION_NVP(bias_);
-    };
+    void serialize(Archive& ar, const unsigned int /*version*/) {
+        ar& BOOST_SERIALIZATION_NVP(pose_);
+        ar& BOOST_SERIALIZATION_NVP(velocity_);
+        ar& BOOST_SERIALIZATION_NVP(bias_);
+    }
 
-    // Overload compound subtraction assignment as a member function
+    // pose_ is set to the relative transform from this to other (this->inverse() * other);
+    // velocity_ and bias_ are arithmetic differences.
     State& operator-=(const State& other) {
-      this->set_pose(this->pose().between(other.pose()));
-      this->set_velocity(this->v() - other.v());
-      this->set_bias(this->b() - other.b());
-      return *this;  // Return a reference to the modified object
+        pose_     = pose_.between(other.pose_);
+        velocity_ = velocity_ - other.velocity_;
+        bias_     = bias_ - other.bias_;
+        return *this;
     }
 
-    // Overload binary subtraction as a non-member friend function
     friend State operator-(State lhs, const State& rhs) {
-      lhs -= rhs;  // Reuse the member operator-=
-      return lhs;  // Return by value
+        lhs -= rhs;
+        return lhs;
     }
-}; // State class
+};
 
-} // namespace gtsam
+}  // namespace slam
 
-
-#endif //IMU_STATE_H
+#endif //SLAM_UTILITIES_STATE_H

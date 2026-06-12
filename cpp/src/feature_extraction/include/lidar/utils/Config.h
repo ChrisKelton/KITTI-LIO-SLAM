@@ -3,13 +3,18 @@
 //
 #pragma once
 
-#ifndef KITTI_LIO_SLAM_CONFIG_H
-#define KITTI_LIO_SLAM_CONFIG_H
+#ifndef FEATURE_EXTRACTION_CONFIG_H
+#define FEATURE_EXTRACTION_CONFIG_H
+
+#include <cstdint>
+#include <string>
 
 class Config {
 public:
-    Config() {};
-    ~Config() {};
+    Config() {}
+    ~Config() {}
+
+    std::string lidarFrame;
 
     // Velodyne sensor configuration
     int N_SCAN;
@@ -20,6 +25,11 @@ public:
 
     // Voxel filter params
     float surfLeafSize;
+    float edgeThreshold;
+    float surfThreshold;
+
+    std::uint32_t lidarCurvatureFeatureExtractionNeighbors;
+    std::uint32_t pixelDiffTh;
 };
 
-#endif //KITTI_LIO_SLAM_CONFIG_H
+#endif //FEATURE_EXTRACTION_CONFIG_H

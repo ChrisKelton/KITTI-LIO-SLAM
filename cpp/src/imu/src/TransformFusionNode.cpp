@@ -64,14 +64,14 @@ void TransformFusionNode::initialize() {
 
 void TransformFusionNode::setup_subpub() {
     subLaserOdometry = this->create_subscription<nav_msgs::msg::Odometry>(
-        "mapping/odometry", 5,
+        "lio_sam/mapping/odometry", 5,
         std::bind(&TransformFusionNode::lidarOdometryHandler, this, std::placeholders::_1));
     subImuOdometry = this->create_subscription<nav_msgs::msg::Odometry>(
         config->odomTopic + "_incremental", 2000,
         std::bind(&TransformFusionNode::imuOdometryHandler, this, std::placeholders::_1));
 
     pubImuOdometry = this->create_publisher<nav_msgs::msg::Odometry>(config->odomTopic, 2000);
-    pubImuPath     = this->create_publisher<nav_msgs::msg::Path>("imu/path", 1);
+    pubImuPath     = this->create_publisher<nav_msgs::msg::Path>("lio_sam/imu/path", 1);
 }
 
 void TransformFusionNode::lidarOdometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr& odomMsg) {

@@ -14,6 +14,8 @@ find_package(PCL REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(slam_msgs REQUIRED)
+find_package(GTSAM REQUIRED)
+find_package(Boost REQUIRED COMPONENTS serialization)
 
 add_library(SlamUtilities INTERFACE)
 
@@ -29,12 +31,14 @@ ament_target_dependencies(SlamUtilities INTERFACE
 target_link_libraries(SlamUtilities INTERFACE
     ${PCL_LIBRARIES}
     Eigen3::Eigen
+    gtsam
+    Boost::serialization
 )
 
 install(TARGETS SlamUtilities EXPORT SlamUtilitiesTargets)
 install(DIRECTORY include/ DESTINATION include)
 
 ament_export_targets(SlamUtilitiesTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp sensor_msgs tf2 tf2_geometry_msgs pcl_conversions slam_msgs PCL Eigen3)
+ament_export_dependencies(rclcpp sensor_msgs tf2 tf2_geometry_msgs pcl_conversions slam_msgs PCL Eigen3 GTSAM Boost)
 
 ament_package()

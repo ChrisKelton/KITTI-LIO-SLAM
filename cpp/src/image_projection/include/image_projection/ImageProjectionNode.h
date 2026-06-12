@@ -7,7 +7,6 @@
 #define KITTI_LIO_SLAM_IMAGEPROJECTIONNODE_H
 
 #include <cmath>
-
 #include <deque>
 #include <limits>
 #include <mutex>

@@ -6,6 +6,8 @@
 #ifndef KITTI_LIO_SLAM_CONFIG_H
 #define KITTI_LIO_SLAM_CONFIG_H
 
+#include <cstdint>
+
 #include <Eigen/Dense>
 
 
@@ -19,8 +21,8 @@ public:
     std::string odomTopic;
     std::string pointCloudTopic;
 
-    uint N_SCAN;
-    uint Horizon_SCAN;
+    uint32_t N_SCAN;
+    uint32_t Horizon_SCAN;
 
     // Extrinsic Rotations between IMU -> LiDAR frame.
     std::vector<double> extRotV;  // 3x3 matrix in vector form
@@ -31,8 +33,8 @@ public:
 
     float lidarMinRange;
     float lidarMaxRange;
-    uint downsampleRate;
-    uint lidarCurvatureFeatureExtractionNeighbors;
+    uint32_t downsampleRate;
+    uint32_t lidarCurvatureFeatureExtractionNeighbors;
 };
 
 #endif //KITTI_LIO_SLAM_CONFIG_H

@@ -167,7 +167,7 @@ class KittiPublisher(Node):
         # self.pub_imu = self.create_publisher(Imu, '/oxts/imu', default_qos_profile_for_is_sync if is_sync else 2000)
 
         # Published to imuPreintegration.cpp & imageProjection.cpp
-        self.pub_imu = self.create_publisher(Imu, 'imu_correct', default_qos_profile_for_is_sync if is_sync else 2000)
+        self.pub_imu = self.create_publisher(Imu, 'imu_raw', default_qos_profile_for_is_sync if is_sync else 2000)
 
         # Published to mapOptimization.cpp
         self.pub_gps = self.create_publisher(NavSatFix, '/oxts/gps', default_qos_profile_for_is_sync if is_sync else 2000)

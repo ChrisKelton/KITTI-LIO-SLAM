@@ -10,7 +10,6 @@
 #include <mutex>
 
 #include <gtsam/base/Vector.h>
-#include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -24,10 +23,6 @@
 #include "slam_utilities/State.h"
 #include "utils/ImuPreintegrationNodeConfig.h"
 
-
-using gtsam::symbol_shorthand::X;  // Pose3    (x, y, z, r, p, y)
-using gtsam::symbol_shorthand::V;  // Velocity (xdot, ydot, zdot)
-using gtsam::symbol_shorthand::B;  // Bias     (ax, ay, az, gx, gy, gz)
 
 
 class ImuPreintegrationNode final : public rclcpp::Node {
@@ -77,10 +72,10 @@ private:
 
     gtsam::Pose3 prevPose_;
     gtsam::Vector3 prevVel_;
-    gtsam::State prevState_;
+    slam::State prevState_;
     gtsam::imuBias::ConstantBias prevBias_;
 
-    gtsam::State prevStateOdom;
+    slam::State prevStateOdom;
     // gtsam::imuBias::ConstantBias prevBiasOdom;
 
     // T_bl: transform points from lidar frame to imu/body frame

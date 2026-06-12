@@ -1,19 +1,18 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-    <name>slam_utilities</name>
+    <name>map_optimization</name>
     <version>0.0.0</version>
-    <description>The slam_utilities package</description>
+    <description>The map_optimization package</description>
     <maintainer email="todo@todo.todo">maintainer</maintainer>
     <license>TODO</license>
     <buildtool_depend>ament_cmake</buildtool_depend>
     <depend>rclcpp</depend>
-    <depend>sensor_msgs</depend>
-    <depend>tf2</depend>
-    <depend>tf2_geometry_msgs</depend>
     <depend>std_msgs</depend>
-    <depend>pcl_conversions</depend>
+    <depend>sensor_msgs</depend>
+    <depend>nav_msgs</depend>
+    <depend>visualization_msgs</depend>
     <depend>slam_msgs</depend>
-    <depend>gtsam</depend>
+    <depend>slam_utilities</depend>
     <export>
         <build_type>ament_cmake</build_type>
     </export>
