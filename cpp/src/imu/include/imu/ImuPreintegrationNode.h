@@ -7,6 +7,7 @@
 #define IMU_IMUPREINTEGRATIONNODE_H
 
 #include <deque>
+#include <memory>
 #include <mutex>
 
 #include <gtsam/base/Vector.h>
@@ -31,7 +32,8 @@ public:
     ~ImuPreintegrationNode() override;
 
 private:
-    Config* config;
+    // unique_ptr so the config is freed automatically (was a raw pointer the destructor never deleted).
+    std::unique_ptr<Config> config;
 
     std::mutex mtx;
 
@@ -49,12 +51,12 @@ private:
     gtsam::noiseModel::Diagonal::shared_ptr priorBiasNoise;
     gtsam::noiseModel::Diagonal::shared_ptr correctionNoise;
     gtsam::noiseModel::Diagonal::shared_ptr correctionNoise2;
-    gtsam::Vector noiseModelBetweenBias;
 
-    // ISAM2 Solver
-    gtsam::ISAM2* isam2;
+    // ISAM2 Solver — unique_ptr so each resetOptimization() frees the previous solver. The raw
+    // pointers leaked one ISAM2 + one graph on every reset (init, every N keyframes, every failure).
+    std::unique_ptr<gtsam::ISAM2> isam2;
     // Nonlinear factor graph to add new factors
-    gtsam::NonlinearFactorGraph* graph;
+    std::unique_ptr<gtsam::NonlinearFactorGraph> graph;
     // New variables to add to the factor graph
     gtsam::Values values_new;
     // Estimated new states of our variable nodes
@@ -62,8 +64,8 @@ private:
 
     // IMU Preintegration
     boost::shared_ptr<gtsam::PreintegrationCombinedParams> preint_params;
-    gtsam::PreintegratedCombinedMeasurements* preint_gtsam_opt = nullptr;
-    gtsam::PreintegratedCombinedMeasurements* preint_gtsam_raw = nullptr;
+    std::unique_ptr<gtsam::PreintegratedCombinedMeasurements> preint_gtsam_opt;
+    std::unique_ptr<gtsam::PreintegratedCombinedMeasurements> preint_gtsam_raw;
     // All Imu messages without care for keyframes from lidar, I think just for comparing between the predicted states
     // of optimizing the path and unoptimized path.
     std::deque<sensor_msgs::msg::Imu> imuMsgsRaw;
@@ -108,9 +110,10 @@ private:
         gtsam::ISAM2Params optParameters;
         optParameters.relinearizeThreshold = 0.1;
         optParameters.relinearizeSkip = 1;
-        isam2 = new gtsam::ISAM2(optParameters);
+        // Assigning to the unique_ptrs frees the previously held solver/graph automatically.
+        isam2 = std::make_unique<gtsam::ISAM2>(optParameters);
 
-        graph = new gtsam::NonlinearFactorGraph();
+        graph = std::make_unique<gtsam::NonlinearFactorGraph>();
 
         const gtsam::Values newGraphValues;
         values_new = newGraphValues;

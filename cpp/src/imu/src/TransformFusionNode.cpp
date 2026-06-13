@@ -50,6 +50,11 @@ void TransformFusionNode::initialize() {
     tfBuffer   = std::make_unique<tf2_ros::Buffer>(this->get_clock());
     tfListener = std::make_unique<tf2_ros::TransformListener>(*tfBuffer);
 
+    // Default to identity so that if the lookup below fails, lidar2Baselink still holds a valid
+    // rotation (w=1). A default-constructed TransformStamped has quaternion (0,0,0,0), which is
+    // not a rotation and would corrupt the odom->baselink transform when used later.
+    lidar2Baselink.transform.rotation.w = 1.0;
+
     if (config->lidarFrame != config->baselinkFrame) {
         try {
             // Blocks up to 3 s waiting for the lidar→baselink static transform.
@@ -112,6 +117,11 @@ void TransformFusionNode::imuOdometryHandler(const nav_msgs::msg::Odometry::Cons
         else
             break;
     }
+
+    // If every queued IMU-odometry sample predates the latest lidar odometry, the queue is now
+    // empty and front()/back() below would be undefined behavior.
+    if (imuOdomQueue.empty())
+        return;
 
     imuOdomAffineFront = odom2affine(imuOdomQueue.front());
     imuOdomAffineBack  = odom2affine(imuOdomQueue.back());

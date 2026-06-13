@@ -26,21 +26,26 @@ void validateFields(const sensor_msgs::msg::PointCloud2& msg) {
 
 // Only supports Velodyne sensor for right now.
 void extractPointCloud(
-    const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg,
+    const sensor_msgs::msg::PointCloud2& msg,
     const pcl::PointCloud<LidarPoint>::Ptr& cloud
 ) {
-    validateFields(*msg);
+    validateFields(msg);
 
-    cloud->reserve(msg->width * msg->height);
-    cloud->header.frame_id = msg->header.frame_id;
+    // Clear stale points: this cloud is only emptied in resetParameters(), which runs after a
+    // *successful* pipeline pass. If deskewInfo() bails (e.g. waiting for IMU), the next scan would
+    // otherwise be appended onto the previous one, corrupting ranges and the range image.
+    cloud->clear();
+
+    cloud->reserve(msg.width * msg.height);
+    cloud->header.frame_id = msg.header.frame_id;
     cloud->height = 1;  // unorganized until ring-projection is done
 
-    sensor_msgs::PointCloud2ConstIterator<float>    iter_x(*msg, "x");
-    sensor_msgs::PointCloud2ConstIterator<float>    iter_y(*msg, "y");
-    sensor_msgs::PointCloud2ConstIterator<float>    iter_z(*msg, "z");
-    sensor_msgs::PointCloud2ConstIterator<float>    iter_intensity(*msg, "intensity");
-    sensor_msgs::PointCloud2ConstIterator<uint16_t> iter_ring(*msg, "ring");
-    sensor_msgs::PointCloud2ConstIterator<float>    iter_time(*msg, "time");
+    sensor_msgs::PointCloud2ConstIterator<float>    iter_x(msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float>    iter_y(msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float>    iter_z(msg, "z");
+    sensor_msgs::PointCloud2ConstIterator<float>    iter_intensity(msg, "intensity");
+    sensor_msgs::PointCloud2ConstIterator<uint16_t> iter_ring(msg, "ring");
+    sensor_msgs::PointCloud2ConstIterator<float>    iter_time(msg, "time");
 
     for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z, ++iter_intensity, ++iter_ring, ++iter_time) {
         LidarPoint p;
@@ -63,7 +68,7 @@ void extractPointCloud(
 ImageProjectionNode::ImageProjectionNode()
     : Node("image_projection_node"), ringFlag(0), deskewFlag(0)
 {
-    config = new Config();
+    config = std::make_unique<Config>();
     setup_config();
     setup_subpub();
     initialize();
@@ -81,21 +86,26 @@ void ImageProjectionNode::setup_config() {
     config->odomTopic        = this->declare_parameter("odomTopic",         "odometry/imu");
     config->pointCloudTopic  = this->declare_parameter("pointCloudTopic",   "points_raw");
 
-    config->N_SCAN       = static_cast<uint32_t>(this->declare_parameter<int>("N_SCAN",        64));
-    config->Horizon_SCAN = static_cast<uint32_t>(this->declare_parameter<int>("Horizon_SCAN", 4096));
+    config->N_SCAN       = this->declare_parameter<int>("N_SCAN",        64);
+    config->Horizon_SCAN = this->declare_parameter<int>("Horizon_SCAN", 4096);
 
-    config->extRotV    = this->declare_parameter<std::vector<float>>("extRotV",    std::vector<float>());
-    config->extRotRPYV = this->declare_parameter<std::vector<float>>("extRotRPYV", std::vector<float>());
+    // Default to identity (row-major 3x3). An empty default would leave extRotV with no storage,
+    // and the Eigen::Map below would then read 9 doubles past the end of an empty buffer.
+    const std::vector<double> identity3x3 = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    config->extRotV    = this->declare_parameter<std::vector<double>>("extRotV",    identity3x3);
+    config->extRotRPYV = this->declare_parameter<std::vector<double>>("extRotRPYV", identity3x3);
     config->extRot  = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(config->extRotV.data(),    3, 3);
     config->extRPY  = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(config->extRotRPYV.data(), 3, 3);
     config->extQRPY = Eigen::Quaterniond(config->extRPY).inverse();
 
     config->lidarMinRange    = this->declare_parameter<float>("lidarMinRange",  1.0);
     config->lidarMaxRange    = this->declare_parameter<float>("lidarMaxRange",  400.0);
-    config->downsampleRate   = static_cast<uint32_t>(this->declare_parameter<int>("downsample_rate", 1));
+    // Parameter name aligned with feature_extraction ("downsampleRate"); previously "downsample_rate",
+    // so a shared YAML config silently applied to only one of the two nodes.
+    config->downsampleRate   = this->declare_parameter<int>("downsampleRate", 1);
     // Must match the value used in featureExtraction for curvature computation.
-    config->lidarCurvatureFeatureExtractionNeighbors = static_cast<uint32_t>(
-        this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5));
+    config->lidarCurvatureFeatureExtractionNeighbors =
+        this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5);
 }
 
 void ImageProjectionNode::setup_subpub() {
@@ -153,8 +163,6 @@ void ImageProjectionNode::resetParameters() {
         imuRotY[i] = 0;
         imuRotZ[i] = 0;
     }
-
-    columnIdnCountVec.assign(config->N_SCAN, 0);
 }
 
 
@@ -174,8 +182,16 @@ void ImageProjectionNode::odometryHandler(const nav_msgs::msg::Odometry::ConstSh
 }
 
 void ImageProjectionNode::cloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
-    if (!cachePointCloud(msg)) {
-        RCLCPP_INFO(this->get_logger(), "Not enough point clouds yet: %zu / %d", cloudQueue.size(), 2);
+    // validateFields() throws if a required field is missing. An exception escaping a ROS2 callback
+    // calls std::terminate, so catch it here and shut down cleanly instead.
+    try {
+        if (!cachePointCloud(msg)) {
+            RCLCPP_INFO(this->get_logger(), "Not enough point clouds yet: %zu / %d", cloudQueue.size(), 2);
+            return;
+        }
+    } catch (const std::runtime_error& ex) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to process point cloud: %s", ex.what());
+        rclcpp::shutdown();
         return;
     }
 
@@ -199,11 +215,20 @@ bool ImageProjectionNode::cachePointCloud(const sensor_msgs::msg::PointCloud2::C
 
     currentCloudMsg = std::move(cloudQueue.front());
     cloudQueue.pop_front();
-    extractPointCloud(msg, laserCloudIn);
+    // Must extract from currentCloudMsg (the scan we just dequeued), not msg (the scan that just
+    // arrived, two frames newer). Using msg desynced the points from the header/timestamps below.
+    extractPointCloud(currentCloudMsg, laserCloudIn);
 
     cloudHeader = currentCloudMsg.header;
     timeScanCur = ROS_TIME(currentCloudMsg);
+    // Guard against an empty cloud before dereferencing back().
+    if (laserCloudIn->points.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Received an empty point cloud, skipping.");
+        return false;
+    }
     timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
+
+    RCLCPP_INFO(this->get_logger(), "Current time scan: '%.9f'. End time scan: '%.9f'", timeScanCur, timeScanEnd);
 
     if (!laserCloudIn->is_dense) {
         RCLCPP_ERROR(this->get_logger(), "Point cloud is not in dense format, please remove NaN points first!");
@@ -236,7 +261,7 @@ bool ImageProjectionNode::cachePointCloud(const sensor_msgs::msg::PointCloud2::C
             }
         }
         if (deskewFlag == -1) {
-            RCLCPP_WARN(this->get_logger(), "Point cloud timestamp not available, deskew function disabled, system will drift signficantly!");
+            RCLCPP_WARN(this->get_logger(), "Point cloud timestamp not available, deskew function disabled, system will drift significantly!");
         }
     }
 
@@ -555,7 +580,9 @@ void ImageProjectionNode::cloudExtraction() {
                 count++;
             }
         }
-        cloudInfo.end_ring_index[i] = count - 1 - 5;
+        // Mirror the start-of-ring offset so both ends reserve the same neighbor margin for
+        // curvature computation (was a hardcoded 5, which only matched the default neighbor count).
+        cloudInfo.end_ring_index[i] = count - 1 - config->lidarCurvatureFeatureExtractionNeighbors;
     }
 }
 

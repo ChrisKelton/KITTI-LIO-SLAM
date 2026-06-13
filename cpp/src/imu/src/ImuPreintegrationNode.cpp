@@ -15,7 +15,7 @@ using gtsam::symbol_shorthand::B;  // Bias     (ax, ay, az, gx, gy, gz)
 
 
 ImuPreintegrationNode::ImuPreintegrationNode() : Node("imu_preintegration") {
-    config = new Config();
+    config = std::make_unique<Config>();
     setup_config();
     initialize();
     setup_subpub();
@@ -36,12 +36,16 @@ void ImuPreintegrationNode::setup_config() {
 
     config->imuGravity = this->declare_parameter<float>("imuGravity", 9.80511);
 
-    config->extRotV    = this->declare_parameter<std::vector<float>>("extRotV",    std::vector<float>());
-    config->extRotRPYV = this->declare_parameter<std::vector<float>>("extRotRPYV", std::vector<float>());
+    // Default to identity rotations and zero translation. Empty defaults would leave these vectors
+    // with no storage, and the Eigen::Map calls below would read past the end of an empty buffer.
+    const std::vector<double> identity3x3 = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const std::vector<double> zero3       = {0, 0, 0};
+    config->extRotV    = this->declare_parameter<std::vector<double>>("extRotV",    identity3x3);
+    config->extRotRPYV = this->declare_parameter<std::vector<double>>("extRotRPYV", identity3x3);
     config->extRot  = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(config->extRotV.data(),    3, 3);
     config->extRPY  = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(config->extRotRPYV.data(), 3, 3);
     config->extQRPY = Eigen::Quaterniond(config->extRPY).inverse();
-    config->extTransV = this->declare_parameter<std::vector<float>>("extTransV", std::vector<float>());
+    config->extTransV = this->declare_parameter<std::vector<double>>("extTransV", zero3);
     config->extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(config->extTransV.data(), 3, 1);
     imu2Lidar = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0),
                              gtsam::Point3(-(config->extTrans.x()), -(config->extTrans.y()), -(config->extTrans.z())));
@@ -58,14 +62,15 @@ void ImuPreintegrationNode::initialize() {
 
 void ImuPreintegrationNode::initialize_noise() {
     priorPoseNoise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2).finished());  // rad,rad,rad,m,m,m
-    // TODO: Verify this value is correct, the LIO-SAM code has this at 1e4, but that would mean the noise on the velocity of the IMU is 1000 m/s
-    priorVelNoise = gtsam::noiseModel::Isotropic::Sigma(3, 1e-4);  // m/s
+    // Sigma is a standard deviation, so 1e4 m/s means "initial velocity essentially unconstrained" —
+    // intentional, since the robot may already be moving at startup. A small sigma (e.g. 1e-4) would
+    // instead pin the initial velocity to zero with high confidence and fight the first IMU factor.
+    priorVelNoise = gtsam::noiseModel::Isotropic::Sigma(3, 1e4);  // m/s
     priorBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);  // 1e-2 ~ 1e-3 good for LIO-SAM app
     correctionNoise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 0.05, 0.05, 0.05, 0.1, 0.1, 0.1).finished());  // rad,rad,rad,m,m,m
     correctionNoise2 = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1, 1, 1, 1, 1, 1).finished());  // rad,rad,rad,m,m,m
-
-    // I believe this is deprecated with the usage of gtsam::CombinedImuMeasurement also estimtaing the bias
-    noiseModelBetweenBias = (gtsam::Vector(6) << config->imuAccBiasN, config->imuAccBiasN, config->imuAccBiasN, config->imuGyrBiasN, config->imuGyrBiasN, config->imuGyrBiasN).finished();
+    // Note: bias random-walk is handled internally by CombinedImuFactor, so no explicit
+    // between-bias noise model is needed here.
 }
 
 void ImuPreintegrationNode::initialize_preint_params() {
@@ -77,8 +82,8 @@ void ImuPreintegrationNode::initialize_preint_params() {
     preint_params->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * std::pow(1e-4, 2);  // error committed in integrating position from velocities
 
     const gtsam::imuBias::ConstantBias prior_imu_bias((gtsam::Vector(6) << 0, 0, 0, 0, 0, 0).finished());
-    preint_gtsam_opt = new gtsam::PreintegratedCombinedMeasurements(preint_params, prior_imu_bias);
-    preint_gtsam_raw = new gtsam::PreintegratedCombinedMeasurements(preint_params, prior_imu_bias);
+    preint_gtsam_opt = std::make_unique<gtsam::PreintegratedCombinedMeasurements>(preint_params, prior_imu_bias);
+    preint_gtsam_raw = std::make_unique<gtsam::PreintegratedCombinedMeasurements>(preint_params, prior_imu_bias);
 }
 
 void ImuPreintegrationNode::setup_subpub() {
@@ -192,12 +197,16 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
         double imuTime = ROS_TIME(*thisImu);
         if (imuTime < currentCorrectionTime - delta_t) {
             double dt = (lastImuT_opt < 0) ? (1.0 / 500.0) : (imuTime - lastImuT_opt);
-            preint_gtsam_opt->integrateMeasurement(
-                gtsam::Vector3(thisImu->linear_acceleration.x, thisImu->linear_acceleration.y, thisImu->linear_acceleration.z),
-                gtsam::Vector3(thisImu->angular_velocity.x, thisImu->angular_velocity.y, thisImu->angular_velocity.z),
-                dt
-            );
-            lastImuT_opt = imuTime;
+            // GTSAM's integrateMeasurement asserts dt > 0; a duplicate or out-of-order IMU stamp
+            // would otherwise throw. Skip the bad sample but still advance/pop so we don't stall.
+            if (dt > 0) {
+                preint_gtsam_opt->integrateMeasurement(
+                    gtsam::Vector3(thisImu->linear_acceleration.x, thisImu->linear_acceleration.y, thisImu->linear_acceleration.z),
+                    gtsam::Vector3(thisImu->angular_velocity.x, thisImu->angular_velocity.y, thisImu->angular_velocity.z),
+                    dt
+                );
+                lastImuT_opt = imuTime;
+            }
             imuMsgsOpt.pop_front();
         } else {
             break;
@@ -256,6 +265,9 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
             sensor_msgs::msg::Imu *thisImu = &imuMsgsRaw.at(i);
             double imuTime = ROS_TIME(*thisImu);
             double dt = (lastImuQT < 0) ? (1.0 / 500.0) : (imuTime - lastImuQT);
+            // Skip non-positive dt (duplicate/out-of-order stamp) to avoid an integrateMeasurement assert.
+            if (dt <= 0)
+                continue;
             preint_gtsam_raw->integrateMeasurement(
                 gtsam::Vector3(thisImu->linear_acceleration.x, thisImu->linear_acceleration.y, thisImu->linear_acceleration.z),
                 gtsam::Vector3(thisImu->angular_velocity.x, thisImu->angular_velocity.y, thisImu->angular_velocity.z),
@@ -287,6 +299,10 @@ void ImuPreintegrationNode::imuHandler(const sensor_msgs::msg::Imu::ConstSharedP
     const double imuTime = ROS_TIME(thisImu);
     const double dt = (lastImuT_imu < 0) ? (1.0 / 500.0) : (imuTime - lastImuT_imu);
     lastImuT_imu = imuTime;
+
+    // Skip non-positive dt (duplicate/out-of-order stamp); integrateMeasurement would assert.
+    if (dt <= 0)
+        return;
 
     // integrate single imu message
     preint_gtsam_raw->integrateMeasurement(

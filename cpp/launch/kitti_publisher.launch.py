@@ -157,7 +157,7 @@ MAP_OPTIMIZATION_PARAMS = {
 
 
 def generate_launch_description():
-    bag_file = str(Path(WS_ROOT) / f"data/raw_data_bag")
+    # bag_file = str(Path(WS_ROOT) / f"data/{SPLIT_TYPE}.bag")
 
     # Node names are omitted so the `/**` parameter wildcard applies cleanly; in
     # particular the imu process hosts two nodes and must not be force-renamed.
@@ -217,8 +217,8 @@ def generate_launch_description():
         map_optimization_node,
         # world_tf_node,
         rviz_node,
-        ExecuteProcess(
-            cmd=["ros2", "bag", "play", bag_file, "--loop", "-r", "1.0", "--clock"],
-            output="screen"
-        )
+        # ExecuteProcess(
+        #     cmd=["ros2", "bag", "play", bag_file, "--loop", "-r", "1.0", "--clock"],
+        #     output="screen"
+        # )
     ])

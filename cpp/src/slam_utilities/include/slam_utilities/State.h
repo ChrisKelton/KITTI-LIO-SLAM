@@ -11,9 +11,6 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/navigation/ImuBias.h>
 
-#include <boost/archive/text_oarchive.hpp>
-#include <boost/archive/text_iarchive.hpp>
-
 
 namespace slam {
 
@@ -23,16 +20,13 @@ class State {
     gtsam::Vector3 velocity_;
     gtsam::imuBias::ConstantBias bias_;
 
-    friend class boost::serialization::access;
-
   public:
     State()
         : pose_(gtsam::Pose3()),
           velocity_(gtsam::Vector3::Zero()),
           bias_(gtsam::imuBias::ConstantBias()) {}
 
-    State(const State& state)
-        : pose_(state.pose_), velocity_(state.velocity_), bias_(state.bias_) {}
+    State(const State& state) = default;
 
     State(const gtsam::Pose3& pose, const gtsam::Vector3& velocity, const gtsam::imuBias::ConstantBias& bias)
         : pose_(pose), velocity_(velocity), bias_(bias) {}
@@ -72,13 +66,6 @@ class State {
 
     void print(const std::string& s = "") const {
         std::cout << s << *this << std::endl;
-    }
-
-    template<class Archive>
-    void serialize(Archive& ar, const unsigned int /*version*/) {
-        ar& BOOST_SERIALIZATION_NVP(pose_);
-        ar& BOOST_SERIALIZATION_NVP(velocity_);
-        ar& BOOST_SERIALIZATION_NVP(bias_);
     }
 
     // pose_ is set to the relative transform from this to other (this->inverse() * other);

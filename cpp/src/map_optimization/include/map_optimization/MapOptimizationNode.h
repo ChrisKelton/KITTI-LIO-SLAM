@@ -110,6 +110,12 @@ private:
     std::vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     std::vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
 
+    // Snapshots taken under mtx for the loop-closure thread, which reads keyframes concurrently
+    // with the subscriber thread's push_back into the vectors above (a reallocation mid-read is UB).
+    // Copying is cheap: these are vectors of shared_ptrs, so only the handles are duplicated.
+    std::vector<pcl::PointCloud<PointType>::Ptr> copy_cornerCloudKeyFrames;
+    std::vector<pcl::PointCloud<PointType>::Ptr> copy_surfCloudKeyFrames;
+
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;

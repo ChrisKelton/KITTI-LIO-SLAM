@@ -385,6 +385,10 @@ void MapOptimizationNode::performLoopClosure() {
     mtx.lock();
     *copy_cloudKeyPoses3D = *cloudKeyPoses3D;
     *copy_cloudKeyPoses6D = *cloudKeyPoses6D;
+    // Snapshot the keyframe clouds under the same lock so loopFindNearKeyframes() never reads them
+    // while the subscriber thread is reallocating them via push_back.
+    copy_cornerCloudKeyFrames = cornerCloudKeyFrames;
+    copy_surfCloudKeyFrames = surfCloudKeyFrames;
     mtx.unlock();
 
     // find keys
@@ -558,8 +562,9 @@ void MapOptimizationNode::loopFindNearKeyframes(pcl::PointCloud<PointType>::Ptr&
         int keyNear = key + i;
         if (keyNear < 0 || keyNear >= cloudSize)
             continue;
-        *nearKeyframes += *transformPointCloud<PointType>(cornerCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
-        *nearKeyframes += *transformPointCloud<PointType>(surfCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
+        // Use the snapshots taken under mtx in performLoopClosure(), not the live vectors.
+        *nearKeyframes += *transformPointCloud<PointType>(copy_cornerCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
+        *nearKeyframes += *transformPointCloud<PointType>(copy_surfCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
     }
 
     if (nearKeyframes->empty())

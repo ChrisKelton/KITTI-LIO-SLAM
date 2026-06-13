@@ -9,6 +9,7 @@
 #include <cmath>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -106,9 +107,9 @@ private:
     int deskewFlag;
     cv::Mat rangeMat;
 
-    std::vector<int> columnIdnCountVec;
-
-    Config* config;
+    // unique_ptr so the node owns the config and it is freed automatically (previously a raw
+    // pointer that the destructor never deleted).
+    std::unique_ptr<Config> config;
 
 public:
     ImageProjectionNode();

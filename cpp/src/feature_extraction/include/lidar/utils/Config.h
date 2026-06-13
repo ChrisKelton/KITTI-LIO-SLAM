@@ -28,8 +28,10 @@ public:
     float edgeThreshold;
     float surfThreshold;
 
-    std::uint32_t lidarCurvatureFeatureExtractionNeighbors;
-    std::uint32_t pixelDiffTh;
+    // Signed: these are negated and mixed with signed indices in the feature loops, where an
+    // unsigned type would wrap to a huge positive value.
+    int lidarCurvatureFeatureExtractionNeighbors;
+    int pixelDiffTh;
 };
 
 #endif //FEATURE_EXTRACTION_CONFIG_H

@@ -21,8 +21,10 @@ public:
     std::string odomTopic;
     std::string pointCloudTopic;
 
-    uint32_t N_SCAN;
-    uint32_t Horizon_SCAN;
+    // Count-like values are signed: they are mixed with signed loop indices and (in feature
+    // extraction) negated, where an unsigned type wraps to a huge positive value.
+    int N_SCAN;
+    int Horizon_SCAN;
 
     // Extrinsic Rotations between IMU -> LiDAR frame.
     std::vector<double> extRotV;  // 3x3 matrix in vector form
@@ -33,8 +35,8 @@ public:
 
     float lidarMinRange;
     float lidarMaxRange;
-    uint32_t downsampleRate;
-    uint32_t lidarCurvatureFeatureExtractionNeighbors;
+    int downsampleRate;
+    int lidarCurvatureFeatureExtractionNeighbors;
 };
 
 #endif //KITTI_LIO_SLAM_CONFIG_H

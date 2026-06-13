@@ -40,8 +40,8 @@ void LidarFeatureExtractionNode::setup_config() {
     config->edgeThreshold = this->declare_parameter<float>("edgeThreshold", 0.1);
     config->surfThreshold = this->declare_parameter<float>("surfThreshold", 0.1);
 
-    config->lidarCurvatureFeatureExtractionNeighbors = static_cast<uint>(this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5));
-    config->pixelDiffTh = static_cast<uint>(this->declare_parameter<int>("pixelDiffTh", 10));
+    config->lidarCurvatureFeatureExtractionNeighbors = this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5);
+    config->pixelDiffTh = this->declare_parameter<int>("pixelDiffTh", 10);
 }
 
 void LidarFeatureExtractionNode::initialize() {
@@ -92,7 +92,9 @@ void LidarFeatureExtractionNode::calculateSmoothness() {
         float diffRange = cloudInfo.point_range[i-config->lidarCurvatureFeatureExtractionNeighbors];
         for (int j = -(config->lidarCurvatureFeatureExtractionNeighbors)+1; j <= config->lidarCurvatureFeatureExtractionNeighbors; j++) {
             if (j == 0) {
-                diffRange -= cloudInfo.point_range[i] * 10;
+                // Center point is weighted by the number of neighbors summed on each side (2*N),
+                // i.e. sum(neighbors) - 2*N*center. The literal 10 only held for the default N=5.
+                diffRange -= cloudInfo.point_range[i] * 2 * config->lidarCurvatureFeatureExtractionNeighbors;
             } else {
                 diffRange += cloudInfo.point_range[i+j];
             }
@@ -150,8 +152,13 @@ void LidarFeatureExtractionNode::extractFeatures() {
     for (int i = 0; i < config->N_SCAN; ++i) {
         surfaceCloudScan->clear();
         for (int j = 0; j < config->lidarCurvatureFeatureExtractionNeighbors + 1; ++j) {
-            int sp = (cloudInfo.start_ring_index[i] * ((config->lidarCurvatureFeatureExtractionNeighbors + 1) - j) + cloudInfo.end_ring_index[i] * j) / (config->lidarCurvatureFeatureExtractionNeighbors + 1);
-            int ep = (cloudInfo.start_ring_index[i] * (config->lidarCurvatureFeatureExtractionNeighbors - j) + cloudInfo.end_ring_index[i] * (j + 1)) / config->lidarCurvatureFeatureExtractionNeighbors;
+            // Split each ring into (neighbors + 1) subregions. Both sp and ep must divide by the
+            // same subregion count, and ep ends one short of the next subregion's start. Previously
+            // ep divided by `neighbors` (not neighbors + 1) and omitted the -1, so subregions
+            // overlapped and the last one's end index ran past the valid data (UB in std::sort).
+            const int numSubregions = config->lidarCurvatureFeatureExtractionNeighbors + 1;
+            int sp = (cloudInfo.start_ring_index[i] * (numSubregions - j)     + cloudInfo.end_ring_index[i] * j)       / numSubregions;
+            int ep = (cloudInfo.start_ring_index[i] * (numSubregions - 1 - j) + cloudInfo.end_ring_index[i] * (j + 1)) / numSubregions - 1;
 
             if (sp >= ep)
                 continue;
