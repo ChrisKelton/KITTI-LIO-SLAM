@@ -3,8 +3,8 @@
 //
 #pragma once
 
-#ifndef FEATURE_EXTRACTION_MAPOPTIMIZATIONNODE_H
-#define FEATURE_EXTRACTION_MAPOPTIMIZATIONNODE_H
+#ifndef MAP_OPTIMIZATION_MAPOPTIMIZATIONNODE_H
+#define MAP_OPTIMIZATION_MAPOPTIMIZATIONNODE_H
 
 #include <deque>
 #include <map>
@@ -25,6 +25,7 @@
 #include <pcl/kdtree/kdtree_flann.h>
 
 #include <rclcpp/rclcpp.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -65,6 +66,10 @@ public:
     MapOptimizationNode();
     ~MapOptimizationNode() override;
 
+    // Run as dedicated std::threads alongside rclcpp::spin (see main.cpp)
+    void visualizeGlobalMapThread();
+    void loopClosureThread();
+
 private:
     Config* config;
 
@@ -96,6 +101,8 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr subLoop;
 
     rclcpp::Service<slam_srvs::srv::SaveMap>::SharedPtr srvSaveMap;
+
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tfBroadcaster;
 
     std::deque<nav_msgs::msg::Odometry> gpsQueue;
     slam_msgs::msg::CloudInfo cloudInfo;
@@ -179,9 +186,7 @@ private:
     void gpsHandler(const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
     void pointAssociateToMap(PointType const* const pt_in, PointType* const pt_out);
     bool saveMapService(slam_srvs::srv::SaveMap::Request& req, slam_srvs::srv::SaveMap::Response& res);
-    void visualizeGlobalMapThread();
     void publishGlobalMap();
-    void loopClosureThread();
     void loopInfoHandler(const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg);
     void performLoopClosure();
     bool detectLoopClosureDistance(int* latestId, int* closestId);
@@ -212,4 +217,4 @@ private:
     void publishFrames();
 };
 
-#endif //FEATURE_EXTRACTION_MAPOPTIMIZATIONNODE_H
+#endif //MAP_OPTIMIZATION_MAPOPTIMIZATIONNODE_H

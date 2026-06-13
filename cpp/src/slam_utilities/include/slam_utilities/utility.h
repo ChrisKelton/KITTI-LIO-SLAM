@@ -132,8 +132,7 @@ inline float pointDistance(const PointType& p1, const PointType& p2) {
 
 
 template<typename T>
-sensor_msgs::msg::PointCloud2 publishCloud(
-    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& thisPub,
+sensor_msgs::msg::PointCloud2 cloudToRosMsg(
     const typename pcl::PointCloud<T>::Ptr& thisCloud,
     const rclcpp::Time thisStamp,
     const std::string thisFrame
@@ -142,6 +141,18 @@ sensor_msgs::msg::PointCloud2 publishCloud(
     pcl::toROSMsg(*thisCloud, tmpCloud);
     tmpCloud.header.stamp = thisStamp;
     tmpCloud.header.frame_id = thisFrame;
+    return tmpCloud;
+}
+
+
+template<typename T>
+sensor_msgs::msg::PointCloud2 publishCloud(
+    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& thisPub,
+    const typename pcl::PointCloud<T>::Ptr& thisCloud,
+    const rclcpp::Time thisStamp,
+    const std::string thisFrame
+) {
+    sensor_msgs::msg::PointCloud2 tmpCloud = cloudToRosMsg<T>(thisCloud, thisStamp, thisFrame);
     if (thisPub->get_subscription_count() != 0)
         thisPub->publish(tmpCloud);
     return tmpCloud;

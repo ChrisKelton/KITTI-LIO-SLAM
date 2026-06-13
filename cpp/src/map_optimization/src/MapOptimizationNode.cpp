@@ -4,12 +4,16 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 
 #include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 
 #include <pcl/common/angles.h>
+#include <pcl/common/transforms.h>
 #include <pcl/registration/icp.h>
+
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include "MapOptimizationNode.h"
 #include "slam_utilities/map_utilities.h"
@@ -144,7 +148,12 @@ void MapOptimizationNode::setup_subpub() {
     subGPS = this->create_subscription<nav_msgs::msg::Odometry>(config->gpsTopic, 200, std::bind(&MapOptimizationNode::gpsHandler, this, std::placeholders::_1));
     subLoop = this->create_subscription<std_msgs::msg::Float64MultiArray>("lio_loop/loop_closure_detection", 1, std::bind(&MapOptimizationNode::loopInfoHandler, this, std::placeholders::_1));
 
-    srvSaveMap = this->create_service<slam_srvs::srv::SaveMap>("lio_sam/save_map", std::bind(&MapOptimizationNode::saveMapService, this, std::placeholders::_1, std::placeholders::_2));
+    srvSaveMap = this->create_service<slam_srvs::srv::SaveMap>("lio_sam/save_map",
+        [this](const std::shared_ptr<slam_srvs::srv::SaveMap::Request> req, std::shared_ptr<slam_srvs::srv::SaveMap::Response> res) {
+            saveMapService(*req, *res);
+        });
+
+    tfBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     pubHistoryKeyFrames = this->create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/icp_loop_closure_history_cloud", 1);
     pubIcpKeyFrames = this->create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/icp_loop_closure_corrected_cloud", 1);
@@ -160,7 +169,7 @@ void MapOptimizationNode::setup_subpub() {
 void MapOptimizationNode::laserCloudInfoHandler(const slam_msgs::msg::CloudInfo::ConstSharedPtr& msg) {
     // extract time stamp
     timeLaserInfoStamp = msg->header.stamp;
-    timeLaserInfoCur = ROS_TIME(msg);
+    timeLaserInfoCur = ROS_TIME(*msg);
 
     // extract info and feature cloud
     cloudInfo = *msg;
@@ -207,15 +216,26 @@ bool MapOptimizationNode::saveMapService(slam_srvs::srv::SaveMap::Request& req, 
 
     RCLCPP_INFO(this->get_logger(), "****************************************************");
     RCLCPP_INFO(this->get_logger(), "Saving map to pcd files...");
+    const char* homeEnv = std::getenv("HOME");
+    if (homeEnv == nullptr) {
+        RCLCPP_ERROR(this->get_logger(), "HOME environment variable not set, cannot resolve save destination");
+        res.success = false;
+        return false;
+    }
     if (req.destination.empty()) {
-        saveMapDirectory = std::getenv("HOME") + config->savePCDDirectory;
+        saveMapDirectory = homeEnv + config->savePCDDirectory;
     } else {
-        saveMapDirectory = std::getenv("HOME") + req.destination;
+        saveMapDirectory = homeEnv + req.destination;
     }
     RCLCPP_INFO(this->get_logger(), "Save destination: %s", saveMapDirectory.c_str());
-    // create directory and remove old files
-    int unused = std::system((std::string("exec rm -r ") + saveMapDirectory).c_str());
-    unused = std::system((std::string("mkdir -p ") + saveMapDirectory).c_str());
+    // recreate the directory, dropping any previously saved map
+    std::error_code ec;
+    std::filesystem::remove_all(saveMapDirectory, ec);
+    if (!std::filesystem::create_directories(saveMapDirectory, ec) && ec) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create save directory: %s", ec.message().c_str());
+        res.success = false;
+        return false;
+    }
     // save key frame transformations
     pcl::io::savePCDFileBinary(saveMapDirectory + "/trajectory.pcd", *cloudKeyPoses3D);
     pcl::io::savePCDFileBinary(saveMapDirectory + "/transformations.pcd", *cloudKeyPoses6D);
@@ -336,7 +356,7 @@ void MapOptimizationNode::publishGlobalMap() {
 }
 
 void MapOptimizationNode::loopClosureThread() {
-    if (config->loopClosureEnableFlag)
+    if (!config->loopClosureEnableFlag)
         return;
 
     rclcpp::Rate rate(config->loopClosureFrequency);
@@ -410,7 +430,7 @@ void MapOptimizationNode::performLoopClosure() {
     // publish corrected cloud
     if (pubIcpKeyFrames->get_subscription_count() != 0) {
         pcl::PointCloud<PointType>::Ptr closed_cloud(new pcl::PointCloud<PointType>());
-        transformPointCloud(*curKeyframeCloud, *closed_cloud, icp.getFinalTransformation());
+        pcl::transformPointCloud(*curKeyframeCloud, *closed_cloud, icp.getFinalTransformation());
         publishCloud<PointType>(pubIcpKeyFrames, closed_cloud, timeLaserInfoStamp, config->odometryFrame);
     }
 
@@ -780,14 +800,14 @@ void MapOptimizationNode::cornerOptimization() {
         pointOri = laserCloudCornerLastDs->points[i];
         // pointSel are now points in the global map, while pointOri are in the local map
         pointAssociateToMap(&pointOri, &pointSel);
-        kdtreeCornerFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
+        int numNeighbors = kdtreeCornerFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
         cv::Mat matA1(3, 3, CV_32F, cv::Scalar::all(0));
         cv::Mat matD1(1, 3, CV_32F, cv::Scalar::all(0));
         cv::Mat matV1(3, 3, CV_32F, cv::Scalar::all(0));
 
         // TODO: Need to update this with 'lidarCurvatureFeatureExtractionNeighbors'
-        if (pointSearchSqDis[4] < 1.0) {
+        if (numNeighbors == 5 && pointSearchSqDis[4] < 1.0) {
             // mean corner point
             float cx = 0, cy = 0, cz = 0;
             for (int j = 0; j < 5; j++) {
@@ -879,7 +899,7 @@ void MapOptimizationNode::surfOptimization() {
 
         pointOri = laserCloudSurfLastDs->points[i];
         pointAssociateToMap(&pointOri, &pointSel);
-        kdtreeSurfFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
+        int numNeighbors = kdtreeSurfFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
         Eigen::Matrix<float, 5, 3> matA0;
         Eigen::Matrix<float, 5, 1> matB0;
@@ -889,7 +909,7 @@ void MapOptimizationNode::surfOptimization() {
         matB0.fill(-1);
         matX0.setZero();
 
-        if (pointSearchSqDis[4] < 1.0) {
+        if (numNeighbors == 5 && pointSearchSqDis[4] < 1.0) {
             for (int j = 0; j < 5; ++j) {
                 matA0(j, 0) = laserCloudSurfFromMapDs->points[pointSearchInd[j]].x;
                 matA0(j, 1) = laserCloudSurfFromMapDs->points[pointSearchInd[j]].y;
@@ -1278,7 +1298,7 @@ void MapOptimizationNode::saveKeyFramesAndFactor() {
         }
     }
 
-    graph->resize(0);
+    graph.resize(0);
     initialEstimate.clear();
 
     // save key poses
@@ -1359,12 +1379,13 @@ void MapOptimizationNode::correctPoses() {
 
 void MapOptimizationNode::updatePath(const PointTypePose& pose_in) {
     geometry_msgs::msg::PoseStamped pose_stamped;
-    pose_stamped.header.stamp = rclcpp::Time().fromSec(pose_in.time);
+    pose_stamped.header.stamp = rclcpp::Time(static_cast<int64_t>(pose_in.time * 1e9));
     pose_stamped.header.frame_id = config->odometryFrame;
     pose_stamped.pose.position.x = pose_in.x;
     pose_stamped.pose.position.y = pose_in.y;
     pose_stamped.pose.position.z = pose_in.z;
-    tf2::Quaternion q = tf2::createQuaternionFromRPY(pose_in.roll, pose_in.pitch, pose_in.yaw);
+    tf2::Quaternion q;
+    q.setRPY(pose_in.roll, pose_in.pitch, pose_in.yaw);
     pose_stamped.pose.orientation.x = q.x();
     pose_stamped.pose.orientation.y = q.y();
     pose_stamped.pose.orientation.z = q.z();
@@ -1383,15 +1404,21 @@ void MapOptimizationNode::publishOdometry()
 	laserOdometryROS.pose.pose.position.x = transformTobeMapped[3];
 	laserOdometryROS.pose.pose.position.y = transformTobeMapped[4];
 	laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
-	laserOdometryROS.pose.pose.orientation = tf2::createQuaternionMsgFromRollPitchYaw(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
+	tf2::Quaternion quatOdom;
+	quatOdom.setRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
+	laserOdometryROS.pose.pose.orientation = tf2::toMsg(quatOdom);
 	pubLaserOdometryGlobal->publish(laserOdometryROS);
 
 	// Publish TF
-	static tf2::TransformBroadcaster br;
-	tf2::Transform t_odom_to_lidar = tf2::Transform(tf2::createQuaternionFromRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]),
-												  tf2::Vector3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
-	tf2::StampedTransform trans_odom_to_lidar = tf2::StampedTransform(t_odom_to_lidar, timeLaserInfoStamp, config->odometryFrame, "lidar_link");
-	br.sendTransform(trans_odom_to_lidar);
+	geometry_msgs::msg::TransformStamped trans_odom_to_lidar;
+	trans_odom_to_lidar.header.stamp = timeLaserInfoStamp;
+	trans_odom_to_lidar.header.frame_id = config->odometryFrame;
+	trans_odom_to_lidar.child_frame_id = "lidar_link";
+	trans_odom_to_lidar.transform.translation.x = transformTobeMapped[3];
+	trans_odom_to_lidar.transform.translation.y = transformTobeMapped[4];
+	trans_odom_to_lidar.transform.translation.z = transformTobeMapped[5];
+	trans_odom_to_lidar.transform.rotation = tf2::toMsg(quatOdom);
+	tfBroadcaster->sendTransform(trans_odom_to_lidar);
 
 	// Publish odometry for ROS (incremental)
 	static bool lastIncreOdomPubFlag = false;
@@ -1435,7 +1462,9 @@ void MapOptimizationNode::publishOdometry()
 		laserOdomIncremental.pose.pose.position.x = x;
 		laserOdomIncremental.pose.pose.position.y = y;
 		laserOdomIncremental.pose.pose.position.z = z;
-		laserOdomIncremental.pose.pose.orientation = tf2::createQuaternionMsgFromRollPitchYaw(roll, pitch, yaw);
+		tf2::Quaternion quatIncremental;
+		quatIncremental.setRPY(roll, pitch, yaw);
+		laserOdomIncremental.pose.pose.orientation = tf2::toMsg(quatIncremental);
 		if (isDegenerate)
 			laserOdomIncremental.pose.covariance[0] = 1;
 		else
@@ -1481,21 +1510,21 @@ void MapOptimizationNode::publishFrames()
 	static int lastSLAMInfoPubSize = -1;
 	if (pubSLAMInfo->get_subscription_count() != 0)
 	{
-		if (lastSLAMInfoPubSize != cloudKeyPoses6D->size())
+		if (lastSLAMInfoPubSize != static_cast<int>(cloudKeyPoses6D->size()))
 		{
 			slam_msgs::msg::CloudInfo slamInfo;
 			slamInfo.header.stamp = timeLaserInfoStamp;
 			pcl::PointCloud<PointType>::Ptr cloudOut(new pcl::PointCloud<PointType>());
 			*cloudOut += *laserCloudCornerLastDs;
 			*cloudOut += *laserCloudSurfLastDs;
-			slamInfo.key_frame_cloud = publishCloud(rclcpp::Publisher(), cloudOut, timeLaserInfoStamp, config->lidarFrame);
-			slamInfo.key_frame_poses = publishCloud(rclcpp::Publisher(), cloudKeyPoses6D, timeLaserInfoStamp, config->odometryFrame);
+			slamInfo.key_frame_cloud = cloudToRosMsg<PointType>(cloudOut, timeLaserInfoStamp, config->lidarFrame);
+			slamInfo.key_frame_poses = cloudToRosMsg<PointTypePose>(cloudKeyPoses6D, timeLaserInfoStamp, config->odometryFrame);
 			pcl::PointCloud<PointType>::Ptr localMapOut(new pcl::PointCloud<PointType>());
 			*localMapOut += *laserCloudCornerFromMapDs;
 			*localMapOut += *laserCloudSurfFromMapDs;
-			slamInfo.key_frame_map = publishCloud(rclcpp::Publisher(), localMapOut, timeLaserInfoStamp, config->odometryFrame);
+			slamInfo.key_frame_map = cloudToRosMsg<PointType>(localMapOut, timeLaserInfoStamp, config->odometryFrame);
 			pubSLAMInfo->publish(slamInfo);
-			lastSLAMInfoPubSize = cloudKeyPoses6D->size();
+			lastSLAMInfoPubSize = static_cast<int>(cloudKeyPoses6D->size());
 		}
 	}
 }

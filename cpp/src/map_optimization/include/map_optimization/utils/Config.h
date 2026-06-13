@@ -3,8 +3,8 @@
 //
 #pragma once
 
-#ifndef FEATURE_EXTRACTION_CONFIG_H
-#define FEATURE_EXTRACTION_CONFIG_H
+#ifndef MAP_OPTIMIZATION_CONFIG_H
+#define MAP_OPTIMIZATION_CONFIG_H
 
 #include <cstdint>
 #include <string>
@@ -60,4 +60,4 @@ public:
     float rotation_tolerance;
 };
 
-#endif //FEATURE_EXTRACTION_CONFIG_H
+#endif //MAP_OPTIMIZATION_CONFIG_H

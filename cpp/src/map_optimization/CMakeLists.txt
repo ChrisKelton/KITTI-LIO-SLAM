@@ -10,13 +10,15 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(visualization_msgs)
+find_package(visualization_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 find_package(slam_msgs REQUIRED)
 find_package(slam_srvs REQUIRED)
 find_package(slam_utilities REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(GTSAM REQUIRED)
 
 find_package(OpenCV REQUIRED)
 
@@ -30,10 +32,10 @@ add_executable(map_optimization
 )
 
 ament_target_dependencies(map_optimization
-    rclcpp std_msgs sensor_msgs nav_msgs visualization_msgs slam_msgs slam_srvs slam_utilities
+    rclcpp std_msgs sensor_msgs nav_msgs visualization_msgs tf2_ros slam_msgs slam_srvs slam_utilities
 )
 
-target_link_libraries(map_optimization ${OpenCV_LIBS} ${PCL_LIBRARIES} Eigen3::Eigen slam_utilities::SlamUtilities)
+target_link_libraries(map_optimization ${OpenCV_LIBS} ${PCL_LIBRARIES} Eigen3::Eigen slam_utilities::SlamUtilities gtsam)
 
 install(TARGETS map_optimization
 DESTINATION lib/${PROJECT_NAME})

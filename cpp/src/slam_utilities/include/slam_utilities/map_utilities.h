@@ -12,8 +12,8 @@
 
 
 template<typename T0, typename T1>
-pcl::PointCloud<T0>::Ptr transformPointCloud(pcl::PointCloud<T0>::Ptr cloudIn, T1* transformIn, int numberOfCores = 2) {
-    pcl::PointCloud<T0>::Ptr cloudOut(new pcl::PointCloud<T0>());
+typename pcl::PointCloud<T0>::Ptr transformPointCloud(typename pcl::PointCloud<T0>::Ptr cloudIn, T1* transformIn, int numberOfCores = 2) {
+    typename pcl::PointCloud<T0>::Ptr cloudOut(new pcl::PointCloud<T0>());
 
     int cloudSize = cloudIn->size();
     cloudOut->resize(cloudSize);
@@ -37,17 +37,17 @@ gtsam::Pose3 pclPointTogtsamPose3(T thisPoint) {
         gtsam::Point3(double(thisPoint.x), double(thisPoint.y), double(thisPoint.z)));
 }
 
-gtsam::Pose3 trans2gtsamPose(float transformIn[]) {
+inline gtsam::Pose3 trans2gtsamPose(float transformIn[]) {
     return gtsam::Pose3(gtsam::Rot3::RzRyRx(transformIn[0], transformIn[1], transformIn[2]),
         gtsam::Point3(transformIn[3], transformIn[4], transformIn[5]));
 }
 
 template<typename T>
 Eigen::Affine3f pclPointToAffine3f(T thisPoint) {
-    return getTransformation(thisPoint.x, thisPoint.y thisPoint.z, thisPoint.roll, thisPoint.pitch, thisPoint.yaw);
+    return getTransformation(thisPoint.x, thisPoint.y, thisPoint.z, thisPoint.roll, thisPoint.pitch, thisPoint.yaw);
 }
 
-Eigen::Affine3f trans2Affine3f(float transformIn[]) {
+inline Eigen::Affine3f trans2Affine3f(float transformIn[]) {
     return getTransformation(transformIn[3], transformIn[4], transformIn[5], transformIn[0], transformIn[1], transformIn[2]);
 }
 
@@ -63,7 +63,7 @@ T trans2PointTypePose(float transformIn[]) {
     return thisPose6D;
 }
 
-float constraintTransformation(float value, float limit) {
+inline float constraintTransformation(float value, float limit) {
     if (value < -limit) {
         value = -limit;
     } else if (value > limit) {
