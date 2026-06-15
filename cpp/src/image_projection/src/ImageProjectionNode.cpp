@@ -72,6 +72,8 @@ ImageProjectionNode::ImageProjectionNode()
     setup_config();
     setup_subpub();
     initialize();
+
+    RCLCPP_INFO(this->get_logger(), "Setup ImageProjectionNode!");
 }
 
 ImageProjectionNode::~ImageProjectionNode() {}
@@ -195,8 +197,13 @@ void ImageProjectionNode::cloudHandler(const sensor_msgs::msg::PointCloud2::Cons
         return;
     }
 
-    if (!deskewInfo())
+    RCLCPP_INFO(this->get_logger(), "Imu Queue Size: %zu, Odometry Queue Size: %zu", imuQueue.size(), odomQueue.size());
+    if (!deskewInfo()) {
+        RCLCPP_INFO(this->get_logger(), "deskewInfo not prepared!");
         return;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "deskewInfo prepared!");
 
     projectPointCloud();
     cloudExtraction();
@@ -356,10 +363,13 @@ void ImageProjectionNode::odomDeskewInfo() {
     cloudInfo.odom_available = false;
 
     while (!odomQueue.empty()) {
-        if (ROS_TIME(odomQueue.front()) < timeScanCur - 0.01)
+        if (ROS_TIME(odomQueue.front()) < timeScanCur - 0.01) {
+            auto time_ = ROS_TIME(odomQueue.front());
+            RCLCPP_INFO(this->get_logger(), "Removing Odometry message at time '%.9f'", time_);
             odomQueue.pop_front();
-        else
+        } else {
             break;
+        }
     }
 
     if (odomQueue.empty()) {
@@ -591,6 +601,7 @@ void ImageProjectionNode::cloudExtraction() {
 // publishClouds()
 // ***********************************************************
 void ImageProjectionNode::publishClouds() {
+    RCLCPP_INFO(this->get_logger(), "Publishing the deskewed cloud!");
     cloudInfo.header        = cloudHeader;
     cloudInfo.cloud_deskewed = publishCloud<PointType>(
         pubExtractedCloud, extractedCloud, rclcpp::Time(cloudHeader.stamp), config->lidarFrame);

@@ -201,6 +201,8 @@ def generate_launch_description():
     #     output='log',
     # )
 
+
+
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',

@@ -11,6 +11,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(tf2 REQUIRED)
@@ -38,7 +39,7 @@ add_executable(imu
 )
 
 ament_target_dependencies(imu
-    rclcpp std_msgs sensor_msgs nav_msgs geometry_msgs pcl_conversions pcl_ros tf2 tf2_ros tf2_geometry_msgs slam_msgs slam_utilities
+    rclcpp std_msgs sensor_msgs nav_msgs geometry_msgs visualization_msgs pcl_conversions pcl_ros tf2 tf2_ros tf2_geometry_msgs slam_msgs slam_utilities
 )
 
 target_link_libraries(imu ${OpenCV_LIBS} ${PCL_LIBRARIES} Eigen3::Eigen slam_utilities::SlamUtilities gtsam)

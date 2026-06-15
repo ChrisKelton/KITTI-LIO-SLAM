@@ -24,6 +24,8 @@ MapOptimizationNode::MapOptimizationNode() : Node("map_optimization") {
     setup_config();
     initialize();
     setup_subpub();
+
+    RCLCPP_INFO(this->get_logger(), "Setup MapOptimizationNode!");
 }
 
 MapOptimizationNode::~MapOptimizationNode() {
@@ -180,6 +182,7 @@ void MapOptimizationNode::laserCloudInfoHandler(const slam_msgs::msg::CloudInfo:
 
     static double timeLastProcessing = -1;
     if (timeLaserInfoCur - timeLastProcessing >= config->mappingProcessInterval) {
+        RCLCPP_INFO(this->get_logger(), "Processing extracted feature cloud at time '%.9f'", timeLaserInfoCur);
         timeLastProcessing = timeLaserInfoCur;
 
         updateInitialGuess();

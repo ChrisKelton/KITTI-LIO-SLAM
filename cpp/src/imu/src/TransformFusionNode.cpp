@@ -34,6 +34,8 @@ TransformFusionNode::TransformFusionNode()
     setup_config();
     initialize();
     setup_subpub();
+
+    RCLCPP_INFO(this->get_logger(), "Setup TransformFusionNode!");
 }
 
 TransformFusionNode::~TransformFusionNode() {}
@@ -77,6 +79,37 @@ void TransformFusionNode::setup_subpub() {
 
     pubImuOdometry = this->create_publisher<nav_msgs::msg::Odometry>(config->odomTopic, 2000);
     pubImuPath     = this->create_publisher<nav_msgs::msg::Path>("lio_sam/imu/path", 1);
+
+    // Latched (transient_local) so RViz receives the single marker whenever it subscribes.
+    pubRobotMarker = this->create_publisher<visualization_msgs::msg::Marker>(
+        "lio_sam/robot_model", rclcpp::QoS(1).transient_local());
+    publishRobotMarker();
+}
+
+void TransformFusionNode::publishRobotMarker() {
+    // A car-sized box anchored in base_link. Stamp 0 makes RViz transform it with the latest
+    // base_link transform every frame, so the body tracks the live pose along the path.
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = config->baselinkFrame;
+    marker.header.stamp = rclcpp::Time(0);
+    marker.ns = "robot_model";
+    marker.id = 0;
+    marker.type = visualization_msgs::msg::Marker::CUBE;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    // Approximate KITTI vehicle footprint (L x W x H). base_link sits at the roof-mounted lidar,
+    // so drop the body half its height to rest near the ground.
+    marker.scale.x = 4.0;
+    marker.scale.y = 1.8;
+    marker.scale.z = 1.5;
+    marker.pose.position.x = 0.0;
+    marker.pose.position.y = 0.0;
+    marker.pose.position.z = -0.75;
+    marker.pose.orientation.w = 1.0;
+    marker.color.r = 0.1f;
+    marker.color.g = 0.8f;
+    marker.color.b = 0.1f;
+    marker.color.a = 0.6f;
+    pubRobotMarker->publish(marker);
 }
 
 void TransformFusionNode::lidarOdometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr& odomMsg) {

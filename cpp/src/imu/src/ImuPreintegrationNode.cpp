@@ -19,6 +19,8 @@ ImuPreintegrationNode::ImuPreintegrationNode() : Node("imu_preintegration") {
     setup_config();
     initialize();
     setup_subpub();
+
+    RCLCPP_INFO(this->get_logger(), "Setup ImuPreintegrationNode!");
 }
 
 ImuPreintegrationNode::~ImuPreintegrationNode() {}
@@ -94,10 +96,11 @@ void ImuPreintegrationNode::setup_subpub() {
         "lio_sam/mapping/odometry_incremental", 5, std::bind(&ImuPreintegrationNode::odometryHandler, this, std::placeholders::_1)
     );
 
-    pubImuOdometry = this->create_publisher<nav_msgs::msg::Odometry>(config->odomTopic+"_incremental", 2000);
+    pubImuOdometry = this->create_publisher<nav_msgs::msg::Odometry>(config->odomTopic + "_incremental", 2000);
 }
 
 void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *(this->get_clock()), 2, "Ingesting LiDAR Odometry...");
     std::lock_guard lock(mtx);
 
     double currentCorrectionTime = ROS_TIME(*msg);
@@ -120,6 +123,7 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
 
     // initialize system
     if (!systemInitialized) {
+        RCLCPP_INFO(this->get_logger(), "Initializing system");
         resetOptimization();
 
         // pop old IMU messages
@@ -155,6 +159,13 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
 
         preint_gtsam_opt->resetIntegrationAndSetBias(prevBias_);
         preint_gtsam_raw->resetIntegrationAndSetBias(prevBias_);
+
+        // Seed prevState_ from the freshly initialized pose/vel/bias. Without this, the first
+        // optimization (and the first one after every failure reset) predicts from a default-
+        // constructed State at the origin — or worse, the diverged State left over from the
+        // previous failure — which corrupts the initial guess and perpetuates divergence.
+        prevState_ = slam::State(prevPose_, prevVel_, prevBias_);
+        prevStateOdom = prevState_;
 
         key = 1;
         systemInitialized = true;

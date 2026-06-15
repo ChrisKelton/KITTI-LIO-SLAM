@@ -224,7 +224,9 @@ class KittiPublisher(Node):
         self._build_timeline()
 
         self.gt_path_msg = NavPath()
-        self.gt_path_msg.header.frame_id = "world"
+        # 'map' so the ground-truth path overlays the SLAM map in RViz (the SLAM map origin and the
+        # ENU origin both sit at the first frame). 'world' was not in the published TF tree.
+        self.gt_path_msg.header.frame_id = "map"
 
         self.idx = 0
         self.start_wall: float | None = None
@@ -595,7 +597,7 @@ class KittiPublisher(Node):
         # Create PoseStamped ROS message
         pose_msg = PoseStamped()
         pose_msg.header.stamp = stamp
-        pose_msg.header.frame_id = 'world'
+        pose_msg.header.frame_id = 'map'
         pose_msg.pose.position.x = enu_x
         pose_msg.pose.position.y = enu_y
         pose_msg.pose.position.z = enu_z

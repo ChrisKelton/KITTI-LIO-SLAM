@@ -73,6 +73,8 @@ void LidarFeatureExtractionNode::setup_subpub() {
 }
 
 void LidarFeatureExtractionNode::laserCloudInfoHandler(const slam_msgs::msg::CloudInfo::ConstSharedPtr& msg) {
+    RCLCPP_INFO(this->get_logger(), "Extracting features from deskewed cloud!");
+
     cloudInfo = *msg;
     cloudHeader = msg->header;
     pcl::fromROSMsg(msg->cloud_deskewed, *extractedCloud);
@@ -237,6 +239,7 @@ void LidarFeatureExtractionNode::freeCloudInfoMemory() {
 }
 
 void LidarFeatureExtractionNode::publishFeatureCloud() {
+    RCLCPP_INFO(this->get_logger(), "Publishing feature cloud!");
     // free cloud info memory
     freeCloudInfoMemory();
     // save newly extracted features

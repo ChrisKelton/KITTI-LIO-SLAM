@@ -22,6 +22,12 @@ find_package(GTSAM REQUIRED)
 
 find_package(OpenCV REQUIRED)
 
+# Without this, the `#pragma omp parallel for` directives in scan matching
+# (cornerOptimization/surfOptimization, 30 iters/frame) and transformPointCloud
+# compile to serial loops, so numberOfCores has no effect. Required for real-time
+# scan-to-map registration on dense (64-beam) clouds.
+find_package(OpenMP REQUIRED)
+
 include_directories(include/map_optimization ${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
 add_executable(map_optimization
@@ -35,7 +41,7 @@ ament_target_dependencies(map_optimization
     rclcpp std_msgs sensor_msgs nav_msgs visualization_msgs tf2_ros slam_msgs slam_srvs slam_utilities
 )
 
-target_link_libraries(map_optimization ${OpenCV_LIBS} ${PCL_LIBRARIES} Eigen3::Eigen slam_utilities::SlamUtilities gtsam)
+target_link_libraries(map_optimization ${OpenCV_LIBS} ${PCL_LIBRARIES} Eigen3::Eigen slam_utilities::SlamUtilities gtsam OpenMP::OpenMP_CXX)
 
 install(TARGETS map_optimization
 DESTINATION lib/${PROJECT_NAME})

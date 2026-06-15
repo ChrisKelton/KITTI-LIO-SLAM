@@ -35,6 +35,8 @@ public:
         setup_config();
         initialize();
         setup_subpub();
+
+        RCLCPP_INFO(this->get_logger(), "Setup LidarFeatureExtractionNode!");
     }
 
     ~LidarFeatureExtractionNode() {

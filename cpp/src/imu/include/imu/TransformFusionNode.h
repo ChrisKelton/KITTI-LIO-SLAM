@@ -12,6 +12,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -33,6 +34,9 @@ private:
     void setup_config();
     void initialize();
     void setup_subpub();
+    // Publishes a latched box marker in the base_link frame so RViz renders a vehicle body that
+    // rides the odom->base_link transform (i.e. follows the trajectory).
+    void publishRobotMarker();
 
     TransformFusionNodeConfig* config;
     std::mutex mtx;
@@ -42,6 +46,7 @@ private:
 
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubImuOdometry;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubImuPath;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubRobotMarker;
 
     Eigen::Affine3f lidarOdomAffine;
     Eigen::Affine3f imuOdomAffineFront;
