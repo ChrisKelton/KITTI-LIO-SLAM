@@ -82,6 +82,15 @@ void ImuPreintegrationNode::initialize_preint_params() {
     preint_params->accelerometerCovariance = gtsam::Matrix33::Identity(3, 3) * std::pow(config->imuAccNoise, 2);  // acc white noise in continuous
     preint_params->gyroscopeCovariance = gtsam::Matrix33::Identity(3, 3) * std::pow(config->imuGyrNoise, 2);  // gyro white noise in continuous
     preint_params->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * std::pow(1e-4, 2);  // error committed in integrating position from velocities
+    // Bias random-walk covariances for the CombinedImuFactor. PreintegrationCombinedParams defaults
+    // these to Identity (~1.0), leaving the accelerometer bias almost unconstrained between keyframes
+    // — the optimizer then swings it freely to absorb noise, producing a growing sign-alternating
+    // oscillation in the weakly-observable velocity/accel-bias subspace and the periodic |ba|>1 reset.
+    // Set them to the configured bias random-walk noise (biasAccOmegaInt is the small bias uncertainty
+    // used during preintegration).
+    preint_params->biasAccCovariance   = gtsam::Matrix33::Identity(3, 3) * std::pow(config->imuAccBiasN, 2);
+    preint_params->biasOmegaCovariance = gtsam::Matrix33::Identity(3, 3) * std::pow(config->imuGyrBiasN, 2);
+    preint_params->biasAccOmegaInt     = gtsam::Matrix66::Identity(6, 6) * 1e-5;
 
     const gtsam::imuBias::ConstantBias prior_imu_bias((gtsam::Vector(6) << 0, 0, 0, 0, 0, 0).finished());
     preint_gtsam_opt = std::make_unique<gtsam::PreintegratedCombinedMeasurements>(preint_params, prior_imu_bias);
@@ -251,6 +260,26 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
     prevVel_ = values_est.at<gtsam::Vector3>(V(key));
     prevBias_ = values_est.at<gtsam::imuBias::ConstantBias>(B(key));
     prevState_ = slam::State(prevPose_, prevVel_, prevBias_);
+
+    // Per-correction state logging. Prints the optimized velocity and bias every correction so we
+    // can tell whether divergence ramps (gradual accumulation -> tuning / observability issue) or
+    // jumps in a single step (bad lidar-pose correction leaking into the graph). vel/ba/bg norms
+    // mirror the thresholds in failureDetection(); pose translation lets us correlate an IMU blowup
+    // with a jump in the incoming lidar odometry.
+    {
+        const gtsam::Vector3 ba = prevBias_.accelerometer();
+        const gtsam::Vector3 bg = prevBias_.gyroscope();
+        const gtsam::Point3  p  = prevPose_.translation();
+        RCLCPP_INFO(this->get_logger(),
+            "Correction key=%d t=%.6f | pos=[%.2f %.2f %.2f] | vel=[%.3f %.3f %.3f] |v|=%.3f | "
+            "ba=[%.4f %.4f %.4f] |ba|=%.4f | bg=[%.4f %.4f %.4f] |bg|=%.4f",
+            key, currentCorrectionTime,
+            p.x(), p.y(), p.z(),
+            prevVel_.x(), prevVel_.y(), prevVel_.z(), prevVel_.norm(),
+            ba.x(), ba.y(), ba.z(), ba.norm(),
+            bg.x(), bg.y(), bg.z(), bg.norm());
+    }
+
     // Reset the optimization preintegration object
     preint_gtsam_opt->resetIntegrationAndSetBias(prevBias_);
     // check optimization

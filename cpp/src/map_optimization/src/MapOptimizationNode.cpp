@@ -3,20 +3,54 @@
 //
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/navigation/GPSFactor.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
 
 #include <pcl/common/angles.h>
 #include <pcl/common/transforms.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl/registration/icp.h>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include "MapOptimizationNode.h"
 #include "slam_utilities/map_utilities.h"
+
+// Single-residual scan-matching factor for the GTSAM back-end (config useGtsamScanMatcher).
+// residual = nᵀ (T · p) + d, with n the unit feature normal/direction in the map frame and p the
+// point in the lidar/body frame. Covers both planar (point-to-plane) and edge (point-to-line along
+// the perpendicular) correspondences, mirroring how the custom LMOptimization linearizes each as a
+// 1-D residual along the direction stored in coeffSel.
+class PointPlaneFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3> {
+    gtsam::Point3  p_;   // point in the lidar/body frame
+    gtsam::Vector3 n_;   // unit feature normal/direction, in the map frame
+    double         d_;   // offset so residual == nᵀ(T·p) + d
+public:
+    PointPlaneFactor(gtsam::Key key, gtsam::Point3 p, gtsam::Vector3 n, double d,
+                     const gtsam::SharedNoiseModel& model)
+        : gtsam::NoiseModelFactorN<gtsam::Pose3>(model, key),
+          p_(std::move(p)), n_(std::move(n)), d_(d) {}
+
+    // GTSAM 4.2 custom-factor signature (boost::optional Jacobian).
+    gtsam::Vector evaluateError(const gtsam::Pose3& T,
+                                boost::optional<gtsam::Matrix&> H = boost::none) const override {
+        gtsam::Matrix36 Dpose;                          // ∂(T·p)/∂T  (3×6)
+        const gtsam::Point3 q = T.transformFrom(p_, H ? &Dpose : nullptr);
+        if (H) *H = n_.transpose() * Dpose;             // 1×6 analytic Jacobian
+        return gtsam::Vector1(n_.dot(q) + d_);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return boost::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new PointPlaneFactor(*this)));
+    }
+};
 
 
 MapOptimizationNode::MapOptimizationNode() : Node("map_optimization") {
@@ -40,6 +74,12 @@ void MapOptimizationNode::setup_config() {
     config->gpsTopic = this->declare_parameter("gpsTopic", "odometry/gps");
     config->savePCD = this->declare_parameter("savePCD", true);  // TODO: Maybe default this to `false`
     config->savePCDDirectory = this->declare_parameter("savePCDDirectory", "/Downloads/LIO");
+    {
+        const char* homeEnv = std::getenv("HOME");
+        const std::string defaultFeatureDir = (homeEnv ? std::string(homeEnv) : std::string(".")) + "/lio-sam/map-features";
+        config->mapFeatureSaveDirectory = this->declare_parameter("mapFeatureSaveDirectory", defaultFeatureDir);
+    }
+    config->useGtsamScanMatcher = this->declare_parameter("useGtsamScanMatcher", false);
     config->odometryFrame = this->declare_parameter("odometryFrame", "odom");
     config->lidarFrame = this->declare_parameter("lidarFrame", "base_link");
 
@@ -92,6 +132,9 @@ void MapOptimizationNode::initialize() {
     downsizeFilterSurf.setLeafSize(config->mappingSurfLeafSize, config->mappingSurfLeafSize, config->mappingSurfLeafSize);
     downsizeFilterICP.setLeafSize(config->mappingSurfLeafSize, config->mappingSurfLeafSize, config->mappingSurfLeafSize);
     downsizeFilterSurroundingKeyPoses.setLeafSize(config->surroundingKeyframeDensity, config->surroundingKeyframeDensity, config->surroundingKeyframeDensity);
+
+    lastPoseAffineAvailable = false;
+    lastPose6D = ZeroPointTypePose;
 
     allocate_memory();
 }
@@ -185,22 +228,32 @@ void MapOptimizationNode::laserCloudInfoHandler(const slam_msgs::msg::CloudInfo:
         RCLCPP_INFO(this->get_logger(), "Processing extracted feature cloud at time '%.9f'", timeLaserInfoCur);
         timeLastProcessing = timeLaserInfoCur;
 
-        updateInitialGuess();
+        // Per-function runtime profiling. Times each stage of the mapping pipeline so we can see
+        // which stage dominates the per-frame cost (scan-to-map registration on dense 64-beam
+        // clouds is the usual suspect). Logs per-stage and total wall time in milliseconds.
+        using profile_clock = std::chrono::steady_clock;
+        const auto profile_start = profile_clock::now();
+        auto profileStage = [&](const char* name, auto&& fn) {
+            const auto t0 = profile_clock::now();
+            fn();
+            const double ms = std::chrono::duration<double, std::milli>(profile_clock::now() - t0).count();
+            RCLCPP_INFO(this->get_logger(), "  [profile] %-26s %8.3f ms", name, ms);
+        };
 
-        extractSurroundingKeyFrames();
+        profileStage("updateInitialGuess",        [&] { updateInitialGuess(); });
+        profileStage("extractSurroundingKeyFrames", [&] { extractSurroundingKeyFrames(); });
+        profileStage("downsampleCurrentScan",      [&] { downsampleCurrentScan(); });
+        profileStage("scan2MapOptimization",       [&] { scan2MapOptimization(); });
+        profileStage("saveKeyFramesAndFactor",     [&] { saveKeyFramesAndFactor(); });
+        profileStage("correctPoses",               [&] { correctPoses(); });
+        profileStage("publishOdometry",            [&] { publishOdometry(); });
+        profileStage("publishFrames",              [&] { publishFrames(); });
 
-        downsampleCurrentScan();
-
-        scan2MapOptimization();
-
-        saveKeyFramesAndFactor();
-
-        correctPoses();
-
-        publishOdometry();
-
-        publishFrames();
+        const double total_ms = std::chrono::duration<double, std::milli>(profile_clock::now() - profile_start).count();
+        RCLCPP_INFO(this->get_logger(), "  [profile] %-26s %8.3f ms", "TOTAL laserCloudInfoHandler", total_ms);
     }
+
+    aLoopIsClosed = false;
 }
 
 void MapOptimizationNode::gpsHandler(const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
@@ -399,8 +452,13 @@ void MapOptimizationNode::performLoopClosure() {
     int loopKeyPre;
     if (!detectLoopClosureExternal(&loopKeyCur, &loopKeyPre)) {
         if (!detectLoopClosureDistance(&loopKeyCur, &loopKeyPre)) {
+            RCLCPP_INFO(this->get_logger(), "No loop closure detected...");
             return;
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Detected Loop Closure Distance!");
         }
+    } else {
+        RCLCPP_INFO(this->get_logger(), "Detected Loop Closure External!");
     }
 
     // extract cloud
@@ -649,8 +707,9 @@ void MapOptimizationNode::updateInitialGuess() {
         return;
     }
 
-    // use imu pre-integration estimatino for pose guess
+    // use imu pre-integration estimation for pose guess
     static bool lastImuPreTransAvailable = false;
+    // static bool motionModelAvailable = true;
     static Eigen::Affine3f lastImuPreTransformation;
     if (cloudInfo.odom_available) {
         Eigen::Affine3f transBack = getTransformation(cloudInfo.initial_guess_x, cloudInfo.initial_guess_y, cloudInfo.initial_guess_z,
@@ -670,7 +729,63 @@ void MapOptimizationNode::updateInitialGuess() {
             lastImuTransformation = getTransformation(0, 0, 0, cloudInfo.imu_roll_init, cloudInfo.imu_pitch_init, cloudInfo.imu_yaw_init);  // save imu before return
             return;
         }
+
+        // motionModelAvailable = false;
+    } else if (lastPoseAffineAvailable) {
+    // Constant-velocity motion-model fallback. Reached only when IMU pre-integration odometry is
+    // unavailable (e.g. the IMU factor graph has not converged). Previously the guess carried just
+    // the IMU rotation with zero translation, so for a fast-moving vehicle scan-to-map registration
+    // started meters from the truth and the LM loop failed to converge. Here we assume the
+    // inter-frame motion realized in the previous step repeats, giving registration a translation
+    // prior. incrementalOdometryAffineFront is this frame's start pose (= the previous frame's
+    // optimized pose); lastPoseAffine is the frame-before-that, so their delta is the last realized
+    // inter-frame motion, which we replay.
+    // if (motionModelAvailable) {
+        Eigen::Affine3f motionIncre = lastPoseAffine.inverse() * incrementalOdometryAffineFront;
+
+        // Clamp the replayed increment to physically plausible bounds. The constant-velocity replay
+        // otherwise compounds a bad scan-match result into the next initial guess, launching the
+        // pose outside the convergence basin (observed: pose/velocity runaway to z=-70m, |v|=57m/s).
+        // Bound translation by a max speed and rotation by a max rate over the inter-frame dt.
+        {
+            constexpr double kMaxLinearSpeed  = 30.0;  // m/s   (~108 km/h, generous for KITTI)
+            constexpr double kMaxAngularSpeed = 1.5;   // rad/s (per axis)
+            float ix, iy, iz, iroll, ipitch, iyaw;
+            pcl::getTranslationAndEulerAngles(motionIncre, ix, iy, iz, iroll, ipitch, iyaw);
+            const double dt = (lastMotionTime < 0.0) ? 0.1 : std::max(timeLaserInfoCur - lastMotionTime, 1e-3);
+            const float maxTrans = static_cast<float>(kMaxLinearSpeed * dt);
+            const float maxRot   = static_cast<float>(kMaxAngularSpeed * dt);
+            const float transNorm = std::sqrt(ix * ix + iy * iy + iz * iz);
+            if (transNorm > maxTrans && transNorm > 1e-6f) {
+                const float scale = maxTrans / transNorm;
+                ix *= scale; iy *= scale; iz *= scale;
+            }
+            iroll  = std::clamp(iroll,  -maxRot, maxRot);
+            ipitch = std::clamp(ipitch, -maxRot, maxRot);
+            iyaw   = std::clamp(iyaw,   -maxRot, maxRot);
+            motionIncre = getTransformation(ix, iy, iz, iroll, ipitch, iyaw);
+        }
+
+        Eigen::Affine3f transFinal = incrementalOdometryAffineFront * motionIncre;
+        float cvX, cvY, cvZ, cvRoll, cvPitch, cvYaw;
+        pcl::getTranslationAndEulerAngles(transFinal, cvX, cvY, cvZ, cvRoll, cvPitch, cvYaw);
+        // Always adopt the predicted translation.
+        transformTobeMapped[3] = cvX;
+        transformTobeMapped[4] = cvY;
+        transformTobeMapped[5] = cvZ;
+        // Adopt the predicted rotation only when no IMU orientation is available; otherwise the
+        // imu_available block below supplies a more reliable (gyro-based) rotation increment, and
+        // we keep this constant-velocity translation underneath it.
+        if (!cloudInfo.imu_available) {
+            transformTobeMapped[0] = cvRoll;
+            transformTobeMapped[1] = cvPitch;
+            transformTobeMapped[2] = cvYaw;
+        }
     }
+    lastPoseAffine = incrementalOdometryAffineFront;
+    lastMotionTime = timeLaserInfoCur;
+    lastPoseAffineAvailable = true;
+    // motionModelAvailable = true;
 
     // use imu incremental estimation for pose guess (only rotation)
     if (cloudInfo.imu_available) {
@@ -682,7 +797,6 @@ void MapOptimizationNode::updateInitialGuess() {
             transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
 
         lastImuTransformation = pcl::getTransformation(0, 0, 0, cloudInfo.imu_roll_init, cloudInfo.imu_pitch_init, cloudInfo.imu_yaw_init);  // save imu before return
-        return;
     }
 }
 
@@ -964,6 +1078,73 @@ void MapOptimizationNode::surfOptimization() {
     }
 }
 
+void MapOptimizationNode::dumpSurfMatches(int iterCount, const std::string& frameDir) {
+    // Serial replica of surfOptimization's association/gate (no OpenMP, no state mutation), purely to
+    // dump correspondences for inspection. Writes two clouds, both in the MAP frame so they overlay:
+    //   _surfsrc: the transformed source points (pointSel); intensity = signed point-to-plane distance
+    //   _surfnbr: the 5 matched map neighbors per correspondence; intensity = correspondence index
+    // If associations are correct, each src point sits among its 5 neighbors and near their plane.
+    updatePointAssociateToMap();
+
+    pcl::PointCloud<PointType> srcCloud;
+    pcl::PointCloud<PointType> nbrCloud;
+
+    for (int i = 0; i < laserCloudSurfLastDsNum; ++i) {
+        PointType pointOri = laserCloudSurfLastDs->points[i];
+        PointType pointSel;
+        pointAssociateToMap(&pointOri, &pointSel);
+
+        std::vector<int> ind;
+        std::vector<float> sqDis;
+        if (kdtreeSurfFromMap->nearestKSearch(pointSel, 5, ind, sqDis) != 5 || sqDis[4] >= 1.0)
+            continue;
+
+        Eigen::Matrix<float, 5, 3> matA0;
+        Eigen::Matrix<float, 5, 1> matB0;
+        matB0.fill(-1);
+        for (int j = 0; j < 5; ++j) {
+            const auto& p = laserCloudSurfFromMapDs->points[ind[j]];
+            matA0(j, 0) = p.x; matA0(j, 1) = p.y; matA0(j, 2) = p.z;
+        }
+        const Eigen::Vector3f x0 = matA0.colPivHouseholderQr().solve(matB0);
+        float pa = x0(0), pb = x0(1), pc = x0(2), pd = 1;
+        const float ps = std::sqrt(pa * pa + pb * pb + pc * pc);
+        pa /= ps; pb /= ps; pc /= ps; pd /= ps;
+
+        bool valid = true;
+        for (int j = 0; j < 5; ++j) {
+            const auto& p = laserCloudSurfFromMapDs->points[ind[j]];
+            if (std::fabs(pa * p.x + pb * p.y + pc * p.z + pd) > 0.2) { valid = false; break; }
+        }
+        if (!valid)
+            continue;
+
+        const float pd2 = pa * pointSel.x + pb * pointSel.y + pc * pointSel.z + pd;
+        const float s = 1 - 0.9f * std::fabs(pd2) / std::sqrt(std::sqrt(
+            pointOri.x * pointOri.x + pointOri.y * pointOri.y + pointOri.z * pointOri.z));
+        if (s <= 0.1f)
+            continue;
+
+        PointType sp = pointSel;
+        sp.intensity = pd2;                          // signed point-to-plane distance
+        srcCloud.push_back(sp);
+        for (int j = 0; j < 5; ++j) {
+            PointType np = laserCloudSurfFromMapDs->points[ind[j]];
+            np.intensity = static_cast<float>(srcCloud.size());  // group id = source index
+            nbrCloud.push_back(np);
+        }
+    }
+
+    if (srcCloud.empty()) {
+        RCLCPP_WARN(this->get_logger(), "srcCloud empty when attempting to dump Surf matches!");
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(frameDir, ec);
+    pcl::io::savePCDFileBinary(frameDir + "/iter-" + std::to_string(iterCount) + "_surfsrc-" + std::to_string(srcCloud.size()) + ".pcd", srcCloud);
+    pcl::io::savePCDFileBinary(frameDir + "/iter-" + std::to_string(iterCount) + "_surfnbr-" + std::to_string(nbrCloud.size()) + ".pcd", nbrCloud);
+}
+
 void MapOptimizationNode::combineOptimizationCoeffs() {
     // combine corner coeffs
     for (int i = 0; i < laserCloudCornerLastDsNum; ++i) {
@@ -1005,6 +1186,10 @@ bool MapOptimizationNode::LMOptimization(int iterCount)
 
 	int laserCloudSelNum = laserCloudOriginal->size();
 	if (laserCloudSelNum < 50) {
+		// Too few correspondences passed the s>0.1 gate: the solve is skipped and the pose stays at
+		// the (motion-model) initial guess for this frame — a silent way for the estimate to drift.
+		RCLCPP_WARN(this->get_logger(), "[scan2map] iter %d: only %d correspondences (<50), skipping solve",
+			iterCount, laserCloudSelNum);
 		return false;
 	}
 
@@ -1053,7 +1238,19 @@ bool MapOptimizationNode::LMOptimization(int iterCount)
 	cv::transpose(matA, matAt);
 	matAtA = matAt * matA;
 	matAtB = matAt * matB;
-	cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
+
+	// Levenberg damping (λ·I form: an absolute addition to every diagonal). The eigenvalues of AᵀA
+	// span ~1e6 down to ~1e2; the oscillation that kept plain Gauss-Newton from converging lives in
+	// the weak directions (z, roll/pitch; eig ~5e2). Marquardt damping (λ·diag) scales by each DoF's
+	// own curvature and so barely touches those weak directions — it was ineffective. A constant λ
+	// sized to the weak eigenvalues damps them meaningfully (eig 5e2 + λ 3e2 ≈ halves the step) while
+	// being negligible for the strong directions (eig 1e6 + 3e2 ≈ unchanged). Applied to a copy so
+	// the eigenvalue/degeneracy diagnostics below still see the true (undamped) AᵀA.
+	constexpr float kLMLambda = 300.0f;
+	cv::Mat matAtADamped = matAtA.clone();
+	for (int d = 0; d < 6; ++d)
+		matAtADamped.at<float>(d, d) += kLMLambda;
+	cv::solve(matAtADamped, matAtB, matX, cv::DECOMP_QR);
 
 	if (iterCount == 0) {
 
@@ -1077,6 +1274,18 @@ bool MapOptimizationNode::LMOptimization(int iterCount)
 			}
 		}
 		matP = matV.inv() * matV2;
+
+			// Conditioning diagnostics, once per frame (iter 0). The 6 eigenvalues of AᵀA are the
+			// observability of each pose DoF; any below the threshold (100) get locked out as
+			// degenerate. cv::eigen returns them descending, so [5] is the weakest direction.
+			// Pair this with the correspondence count: too few or an ill-conditioned (small-min)
+			// system is why scan matching fails to converge.
+			RCLCPP_INFO(this->get_logger(),
+				"[scan2map] corr=%d (corner=%d surf=%d) | eigvals[%.1f %.1f %.1f %.1f %.1f %.1f] min=%.2f | degenerate=%d",
+				laserCloudSelNum, laserCloudCornerLastDsNum, laserCloudSurfLastDsNum,
+				matE.at<float>(0, 0), matE.at<float>(0, 1), matE.at<float>(0, 2),
+				matE.at<float>(0, 3), matE.at<float>(0, 4), matE.at<float>(0, 5),
+				matE.at<float>(0, 5), isDegenerate ? 1 : 0);
 	}
 
 	if (isDegenerate)
@@ -1086,12 +1295,44 @@ bool MapOptimizationNode::LMOptimization(int iterCount)
 		matX = matP * matX2;
 	}
 
+	// Capture the pre-step pose to test whether this step reduces the point-to-plane/line cost on the
+	// *fixed* correspondence set (separates a wrong-direction solver step from an under-constrained
+	// geometry problem). Each residual is reconstructed from coeffSel: pd2 = coeff.intensity / s and
+	// n = coeff.xyz / s (s = |coeff.xyz|); after the step pd2_new = pd2_old + n·(T_new·p - T_old·p).
+	float transformBeforeStep[6];
+	for (int b = 0; b < 6; ++b) transformBeforeStep[b] = transformTobeMapped[b];
+
 	transformTobeMapped[0] += matX.at<float>(0, 0);
 	transformTobeMapped[1] += matX.at<float>(1, 0);
 	transformTobeMapped[2] += matX.at<float>(2, 0);
 	transformTobeMapped[3] += matX.at<float>(3, 0);
 	transformTobeMapped[4] += matX.at<float>(4, 0);
 	transformTobeMapped[5] += matX.at<float>(5, 0);
+
+	{
+		const Eigen::Affine3f aOld = trans2Affine3f(transformBeforeStep);
+		const Eigen::Affine3f aNew = trans2Affine3f(transformTobeMapped);
+		double costBefore = 0.0, costAfter = 0.0;
+		int used = 0;
+		for (int i = 0; i < laserCloudSelNum; ++i) {
+			const PointType& po = laserCloudOriginal->points[i];
+			const PointType& cf = coeffSel->points[i];
+			const float s = std::sqrt(cf.x * cf.x + cf.y * cf.y + cf.z * cf.z);
+			if (s < 1e-6f) continue;
+			const float pd2old = cf.intensity / s;
+			const Eigen::Vector3f p(po.x, po.y, po.z);
+			const Eigen::Vector3f dP = aNew * p - aOld * p;
+			const float pd2new = pd2old + (cf.x * dP.x() + cf.y * dP.y() + cf.z * dP.z()) / s;
+			costBefore += static_cast<double>(pd2old) * pd2old;
+			costAfter  += static_cast<double>(pd2new) * pd2new;
+			++used;
+		}
+		RCLCPP_INFO(this->get_logger(),
+			"LMstep iter %d: SSE %.4f -> %.4f (rms %.4f -> %.4f) over %d corr  %s",
+			iterCount, costBefore, costAfter,
+			used ? std::sqrt(costBefore / used) : 0.0, used ? std::sqrt(costAfter / used) : 0.0,
+			used, costAfter <= costBefore ? "reduced" : "INCREASED");
+	}
 
 	float deltaR = std::sqrt(
 						std::pow(pcl::rad2deg(matX.at<float>(0, 0)), 2) +
@@ -1102,6 +1343,7 @@ bool MapOptimizationNode::LMOptimization(int iterCount)
 						std::pow(matX.at<float>(4, 0) * 100, 2) +
 						std::pow(matX.at<float>(5, 0) * 100, 2));
 
+    RCLCPP_INFO(this->get_logger(), "deltaR: '%.4f', deltaT: '%.4f'", deltaR, deltaT);
 	if (deltaR < 0.05 && deltaT < 0.05) {
 		return true; // converged
 	}
@@ -1116,19 +1358,147 @@ void MapOptimizationNode::scan2MapOptimization() {
         kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDs);
         kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDs);
 
-        for (int iterCount=0; iterCount < 30; iterCount++) {
-            laserCloudOriginal->clear();
-            coeffSel->clear();
-            cornerOptimization();
-            surfOptimization();
-            combineOptimizationCoeffs();
-            if (LMOptimization(iterCount))
-                break;
+        // Two interchangeable back-ends: the original hand-rolled Gauss-Newton/Levenberg solver, or
+        // a GTSAM LevenbergMarquardtOptimizer over a single Pose3. Both re-associate correspondences
+        // each iteration (cornerOptimization/surfOptimization) and write the result into
+        // transformTobeMapped; select via the useGtsamScanMatcher config flag for A/B comparison.
+        // if (config->useGtsamScanMatcher) {
+// TODO: Revert to config->useGtsamScanMatcher
+        if (false) {
+            RCLCPP_INFO(this->get_logger(), "Using GTSAM for Nonlinear Optimization.");
+            scan2MapOptimizationGtsam();
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Using Custom Code for Nonlinear Optimization.");
+            scan2MapOptimizationCustom();
         }
 
+        ++mapFeatureFrameIdx;
         transformUpdate();
     } else {
         RCLCPP_WARN(this->get_logger(), "Not enough features! Only %d edge and %d planar features available.", laserCloudCornerLastDsNum, laserCloudSurfLastDsNum);
+    }
+}
+
+void MapOptimizationNode::scan2MapOptimizationCustom() {
+    // Guardrail against worst-case frames: a healthy registration converges (LMOptimization
+    // returns true) in well under 10 iterations. When it does not converge — e.g. a poor
+    // initial guess — the loop used to grind through all 30 iterations, producing multi-second
+    // frames. 15 caps that cost while leaving ample room for normal convergence.
+    constexpr int kMaxLMIterations = 15;
+    // Per-iteration correspondence cloud dump (debugging convergence). Each scan-matched lidar
+    // frame gets its own <dir>/frame-<N>/ directory; the directory is created lazily so frames
+    // with no selected correspondences leave no empty folders.
+    const std::string frameDir = config->mapFeatureSaveDirectory + "/frame-" + std::to_string(mapFeatureFrameIdx);
+    bool frameDirCreated = false;
+    for (int iterCount = 0; iterCount < kMaxLMIterations; iterCount++) {
+        laserCloudOriginal->clear();
+        coeffSel->clear();
+        cornerOptimization();
+        surfOptimization();
+        combineOptimizationCoeffs();
+        if (!laserCloudOriginal->empty()) {
+            if (!frameDirCreated) {
+                std::error_code ec;
+                std::filesystem::create_directories(frameDir, ec);
+                frameDirCreated = true;
+            }
+            pcl::io::savePCDFileBinary(
+                frameDir + "/iter-" + std::to_string(iterCount) +
+                    "_points-" + std::to_string(laserCloudOriginal->size()) + ".pcd",
+                *laserCloudOriginal);
+            // Frame-0 only: also dump the matched map neighbors so associations can be verified.
+            if (mapFeatureFrameIdx == 0) {
+                RCLCPP_INFO(this->get_logger(), "Dumping Surf Matches!");
+                dumpSurfMatches(iterCount, frameDir);
+            }
+        } else {
+            RCLCPP_INFO(this->get_logger(), "laserCloudOriginal is empty...");
+        }
+        if (LMOptimization(iterCount))
+            break;
+    }
+}
+
+void MapOptimizationNode::scan2MapOptimizationGtsam() {
+    using gtsam::symbol_shorthand::X;
+
+    auto toPose3 = [&] {
+        return gtsam::Pose3(gtsam::Rot3::RzRyRx(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]),
+                            gtsam::Point3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
+    };
+
+    const std::string frameDir = config->mapFeatureSaveDirectory + "/frame-" + std::to_string(mapFeatureFrameIdx);
+    bool frameDirCreated = false;
+
+    // Outer ICP loop: re-find correspondences at the latest pose, then let GTSAM's LM refine the
+    // single Pose3 against that (fixed) correspondence set. GTSAM owns the damping/relinearization
+    // that the custom path approximated with a fixed λ·I.
+    constexpr int kMaxOuterIters = 15;
+    for (int outer = 0; outer < kMaxOuterIters; ++outer) {
+        laserCloudOriginal->clear();
+        coeffSel->clear();
+        cornerOptimization();
+        surfOptimization();
+        combineOptimizationCoeffs();
+
+        const int nCorr = static_cast<int>(laserCloudOriginal->size());
+        if (!laserCloudOriginal->empty()) {
+            if (!frameDirCreated) {
+                std::error_code ec;
+                std::filesystem::create_directories(frameDir, ec);
+                frameDirCreated = true;
+            }
+            pcl::io::savePCDFileBinary(
+                frameDir + "/iter-" + std::to_string(outer) + "_points-" + std::to_string(nCorr) + ".pcd",
+                *laserCloudOriginal);
+        }
+        if (nCorr < 50)
+            break;
+
+        const gtsam::Pose3 Tcur = toPose3();
+        gtsam::NonlinearFactorGraph graph;
+        gtsam::Values initial;
+        initial.insert(X(0), Tcur);
+
+        for (int i = 0; i < nCorr; ++i) {
+            const auto& po = laserCloudOriginal->points[i];   // body-frame point
+            const auto& cf = coeffSel->points[i];             // s·normal, s·signedDist
+
+            const gtsam::Vector3 sn(cf.x, cf.y, cf.z);
+            const double s = sn.norm();                       // per-point weight
+            if (s < 1e-6)
+                continue;
+            const gtsam::Vector3 nrm = sn / s;                // unit normal/direction
+            const double signedDist = cf.intensity / s;       // residual at Tcur
+
+            const gtsam::Point3 p(po.x, po.y, po.z);
+            const double d = signedDist - nrm.dot(Tcur.transformFrom(p));  // nᵀ(Tcur·p)+d == signedDist
+
+            // sigma 1/s reproduces the original per-point weighting; Huber adds outlier robustness.
+            const auto base = gtsam::noiseModel::Isotropic::Sigma(1, 1.0 / s);
+            const auto robust = gtsam::noiseModel::Robust::Create(
+                gtsam::noiseModel::mEstimator::Huber::Create(0.1), base);
+            graph.emplace_shared<PointPlaneFactor>(X(0), p, nrm, d, robust);
+        }
+
+        gtsam::LevenbergMarquardtParams params;
+        params.setMaxIterations(10);
+        params.setRelativeErrorTol(1e-4);
+        const gtsam::Values result = gtsam::LevenbergMarquardtOptimizer(graph, initial, params).optimize();
+        const gtsam::Pose3 Topt = result.at<gtsam::Pose3>(X(0));
+
+        const gtsam::Vector3 rpy = Topt.rotation().rpy();
+        transformTobeMapped[0] = rpy.x();
+        transformTobeMapped[1] = rpy.y();
+        transformTobeMapped[2] = rpy.z();
+        transformTobeMapped[3] = Topt.translation().x();
+        transformTobeMapped[4] = Topt.translation().y();
+        transformTobeMapped[5] = Topt.translation().z();
+
+        // Outer-loop convergence: pose change between re-associations.
+        const gtsam::Pose3 delta = Tcur.between(Topt);
+        if (delta.rotation().rpy().norm() < 5e-4 && delta.translation().norm() < 5e-4)
+            break;
     }
 }
 
@@ -1210,10 +1580,13 @@ void MapOptimizationNode::addGPSFactor() {
     if (poseCovariance(3, 3) < config->poseCovThreshold && poseCovariance(4, 4) < config->poseCovThreshold)
         return;
 
+    RCLCPP_INFO(this->get_logger(), "poseCovariance is large! Got '%.4f' & '%.4f'.", poseCovariance(3, 3), poseCovariance(4, 4));
     // last gps position
     static PointType lastGPSPoint;
 
+    int gpsCnt = 0;
     while (!gpsQueue.empty()) {
+        gpsCnt++;
         if (ROS_TIME(gpsQueue.front()) < timeLaserInfoCur - 0.2) {
             // message too old
             gpsQueue.pop_front();
@@ -1260,9 +1633,12 @@ void MapOptimizationNode::addGPSFactor() {
             graph.add(gps_factor);
 
             aLoopIsClosed = true;
+
+            RCLCPP_INFO(this->get_logger(), "Added Loop Closure GPS Factor at (%.5f, %.5f, %.5f)", gps_x, gps_y, gps_z);
             break;
         }
     }
+    RCLCPP_INFO(this->get_logger(), "'%d' GPS messages iterated over.", gpsCnt);
 }
 
 void MapOptimizationNode::addLoopFactor() {
@@ -1272,6 +1648,7 @@ void MapOptimizationNode::addLoopFactor() {
     for (int i = 0; i < static_cast<int>(loopIndexQueue.size()); ++i) {
         int indexFrom = loopIndexQueue[i].first;
         int indexTo = loopIndexQueue[i].second;
+        RCLCPP_INFO(this->get_logger(), "Adding a loop constraint between indices: from '%d' to '%d'", indexFrom, indexTo);
         gtsam::Pose3 poseBetween = loopPoseQueue[i];
         gtsam::noiseModel::Diagonal::shared_ptr noiseBetween = loopNoiseQueue[i];
         graph.add(gtsam::BetweenFactor<gtsam::Pose3>(indexFrom, indexTo, poseBetween, noiseBetween));
@@ -1301,6 +1678,7 @@ void MapOptimizationNode::saveKeyFramesAndFactor() {
     isam2->update();
 
     if (aLoopIsClosed) {
+        RCLCPP_INFO(this->get_logger(), "A loop is closed! Updating iSAM2 Bayes Net '5' times.");
         for (int i = 0; i < 5; ++i) {
             isam2->update();
         }
@@ -1335,6 +1713,27 @@ void MapOptimizationNode::saveKeyFramesAndFactor() {
 
     poseCovariance = isam2->marginalCovariance(isamCurrentEstimate.size()-1);
 
+    auto del_roll = thisPose6D.roll - lastPose6D.roll;
+    auto del_pitch = thisPose6D.pitch - lastPose6D.pitch;
+    auto del_yaw = thisPose6D.yaw - lastPose6D.yaw;
+    auto del_x = thisPose6D.x - lastPose6D.x;
+    auto del_y = thisPose6D.y - lastPose6D.y;
+    auto del_z = thisPose6D.z - lastPose6D.z;
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Latest 6D Pose Update:\n\troll: %.5f + %.5f = %.5f\n\tpitch: %.5f + %.5f = %.5f\n\tyaw: %.5f + %.5f = %.5f\n\t\t(%.5f, %.5f, %.5f)\n\tx: %.5f + %.5f = %.5f\n\ty: %.5f + %.5f = %.5f\n\tz: %.5f + %.5f = %.5f\n\t\t(%.5f, %.5f, %.5f)",
+        lastPose6D.roll, del_roll, thisPose6D.roll,
+        lastPose6D.pitch, del_pitch, thisPose6D.pitch,
+        lastPose6D.yaw, del_yaw, thisPose6D.yaw,
+        thisPose6D.roll, thisPose6D.pitch, thisPose6D.yaw,
+        lastPose6D.x, del_x, thisPose6D.x,
+        lastPose6D.y, del_y, thisPose6D.y,
+        lastPose6D.z, del_z, thisPose6D.z,
+        thisPose6D.x, thisPose6D.y, thisPose6D.z
+        );
+
+    lastPose6D = thisPose6D;
+
     // save updated transform
     transformTobeMapped[0] = latestEstimate.rotation().roll();
     transformTobeMapped[1] = latestEstimate.rotation().pitch();
@@ -1362,6 +1761,7 @@ void MapOptimizationNode::correctPoses() {
         return;
 
     if (aLoopIsClosed) {
+        RCLCPP_INFO(this->get_logger(), "Loop is Closed!");
         // clear map cache
         laserCloudMapContainer.clear();
         // clear path
@@ -1488,7 +1888,16 @@ void MapOptimizationNode::publishFrames()
 	// publish key poses
 	publishCloud<PointType>(pubKeyPoses, cloudKeyPoses3D, timeLaserInfoStamp, config->odometryFrame);
 	// Publish surrounding key frames
-	publishCloud<PointType>(pubRecentKeyFrames, laserCloudSurfFromMapDs, timeLaserInfoStamp, config->odometryFrame);
+    pcl::PointCloud<PointType>::Ptr localMapOut(new pcl::PointCloud<PointType>());
+    *localMapOut += *laserCloudCornerFromMapDs;
+    *localMapOut += *laserCloudSurfFromMapDs;
+    // auto frame_m1 = mapFeatureFrameIdx - 1;
+    // const std::string mapDir = config->mapFeatureSaveDirectory + "/frame-" + std::to_string(frame_m1);
+    // pcl::io::savePCDFileBinary(
+    //     mapDir + "/localMap_points-" + std::to_string(localMapOut->size()) + ".pcd",
+    //     *localMapOut
+    // );
+    publishCloud<PointType>(pubRecentKeyFrames, localMapOut, timeLaserInfoStamp, config->odometryFrame);
 	// publish registered key frame
 	if (pubRecentKeyFrame->get_subscription_count() != 0)
 	{
@@ -1527,9 +1936,6 @@ void MapOptimizationNode::publishFrames()
 			*cloudOut += *laserCloudSurfLastDs;
 			slamInfo.key_frame_cloud = cloudToRosMsg<PointType>(cloudOut, timeLaserInfoStamp, config->lidarFrame);
 			slamInfo.key_frame_poses = cloudToRosMsg<PointTypePose>(cloudKeyPoses6D, timeLaserInfoStamp, config->odometryFrame);
-			pcl::PointCloud<PointType>::Ptr localMapOut(new pcl::PointCloud<PointType>());
-			*localMapOut += *laserCloudCornerFromMapDs;
-			*localMapOut += *laserCloudSurfFromMapDs;
 			slamInfo.key_frame_map = cloudToRosMsg<PointType>(localMapOut, timeLaserInfoStamp, config->odometryFrame);
 			pubSLAMInfo->publish(slamInfo);
 			lastSLAMInfoPubSize = static_cast<int>(cloudKeyPoses6D->size());

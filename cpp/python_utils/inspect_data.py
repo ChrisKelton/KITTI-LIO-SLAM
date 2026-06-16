@@ -13,6 +13,7 @@ from tqdm import tqdm
 DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data/2011_09_26_drive_0022")
 CALIB_PATH = DATA_PATH / "calib"
 SYNC_PATH = DATA_PATH / "sync"
+UNSYNC_PATH = DATA_PATH / "unsync"
 TRACKLETS_PATH = DATA_PATH / "tracklets"
 
 
@@ -466,7 +467,8 @@ def ingest_oxts_data(oxts_dir: Path, out_plots_dir: Optional[Path] = None) -> pd
 
 def main():
     cameras, velo, imu = ingest_calibration_data(CALIB_PATH)
-    oxts_data = ingest_oxts_data(sorted(SYNC_PATH.glob("**/oxts"))[0])
+    # oxts_data = ingest_oxts_data(sorted(SYNC_PATH.glob("**/oxts"))[0])
+    oxts_data = ingest_oxts_data(sorted(UNSYNC_PATH.glob("**/oxts"))[0])
 
 
 if __name__ == '__main__':

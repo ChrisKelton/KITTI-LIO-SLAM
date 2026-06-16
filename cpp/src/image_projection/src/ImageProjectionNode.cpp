@@ -321,7 +321,7 @@ void ImageProjectionNode::imuDeskewInfo() {
     imuPointerCur = 0;
     for (int i = 0; i < (int)imuQueue.size(); ++i) {
         sensor_msgs::msg::Imu thisImuMsg  = imuQueue[i];
-        double                currentImuTime = ROS_TIME(thisImuMsg);
+        double currentImuTime = ROS_TIME(thisImuMsg);
 
         // get roll, pitch, and yaw estimation for initialization at the closest time to the scan start
         // initial orientation for IMU preintegration. Since we filter out older IMU messages that are older
@@ -357,6 +357,16 @@ void ImageProjectionNode::imuDeskewInfo() {
         return;
 
     cloudInfo.imu_available = true;
+
+    // Initial orientation seed handed to map_optimization (updateInitialGuess first-frame branch and
+    // the imu_available rotation branch). For a KITTI vehicle on flat ground these should be within a
+    // few degrees of zero for roll/pitch; large or drifting values indicate the OXTS->IMU orientation
+    // (extQRPY / publish-script quaternion convention) is the source of the z-sink at frame 0.
+    RCLCPP_INFO(this->get_logger(),
+        "imu init (deg): roll=%.3f pitch=%.3f yaw=%.3f",
+        cloudInfo.imu_roll_init  * 180.0 / M_PI,
+        cloudInfo.imu_pitch_init * 180.0 / M_PI,
+        cloudInfo.imu_yaw_init   * 180.0 / M_PI);
 }
 
 void ImageProjectionNode::odomDeskewInfo() {
@@ -365,7 +375,7 @@ void ImageProjectionNode::odomDeskewInfo() {
     while (!odomQueue.empty()) {
         if (ROS_TIME(odomQueue.front()) < timeScanCur - 0.01) {
             auto time_ = ROS_TIME(odomQueue.front());
-            RCLCPP_INFO(this->get_logger(), "Removing Odometry message at time '%.9f'", time_);
+            // RCLCPP_INFO(this->get_logger(), "Removing Odometry message at time '%.9f'", time_);
             odomQueue.pop_front();
         } else {
             break;
@@ -377,9 +387,12 @@ void ImageProjectionNode::odomDeskewInfo() {
         return;
     }
 
-    // Means we have no initial estimate of the odometry pose
-    if (ROS_TIME(odomQueue.front()) > timeScanCur)
+    // Means we have no initial estimate of the odometry pose: the earliest odometry message we have
+    // is still after the scan start, so it cannot seed the pose at the beginning of the scan.
+    if (ROS_TIME(odomQueue.front()) > timeScanCur) {
+        RCLCPP_INFO(this->get_logger(), "No initial estimate of odometry pose available.");
         return;
+    }
 
     // get start odometry at the beginning of the scan
     nav_msgs::msg::Odometry startOdomMsg;

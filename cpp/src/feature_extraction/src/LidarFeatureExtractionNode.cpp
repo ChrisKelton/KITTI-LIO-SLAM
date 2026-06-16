@@ -137,7 +137,7 @@ void LidarFeatureExtractionNode::markOccludedPoints() {
         float diff1 = std::abs(float(cloudInfo.point_range[i-1] - cloudInfo.point_range[i]));
         float diff2 = std::abs(float(cloudInfo.point_range[i+1] - cloudInfo.point_range[i]));
 
-        if (diff1 > 0.02 * cloudInfo.point_range[i] && diff2 > 0.2 * cloudInfo.point_range[i]) {
+        if (diff1 > 0.02 * cloudInfo.point_range[i] && diff2 > 0.02 * cloudInfo.point_range[i]) {
             cloudNeighborPicked[i] = 1;
         }
     }

@@ -50,6 +50,11 @@ struct alignas(16) PointXYZIRPYT {
     float yaw;
     double time;
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // make sure our new allocators are aligned
+    PointXYZIRPYT() = default;
+
+    PointXYZIRPYT(
+        float x, float x1, float x2, float x3, float x4, float x5, float x6, double x7
+        ) : x(x), y(x1), z(x2), intensity(x3), roll(x4), pitch(x5), yaw(x6), time(x7) {}
 };
 POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRPYT,
     (float, x, x) (float, y, y) (float, z, z)
@@ -59,6 +64,8 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRPYT,
 )
 
 typedef PointXYZIRPYT PointTypePose;
+
+const PointTypePose ZeroPointTypePose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
 
 class MapOptimizationNode final : public rclcpp::Node {
@@ -80,6 +87,7 @@ private:
     gtsam::ISAM2* isam2;
     gtsam::Values isamCurrentEstimate;
     Eigen::MatrixXd poseCovariance;
+    PointTypePose lastPose6D;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudSurround;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubLaserOdometryGlobal;
@@ -182,6 +190,16 @@ private:
     Eigen::Affine3f transPointAssociateToMap;
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
+    Eigen::Affine3f lastPoseAffine;
+    // Timestamp of lastPoseAffine, used to scale the motion-model increment clamp by the
+    // inter-frame dt. -1 until the first motion-model step.
+    double lastMotionTime = -1.0;
+
+    // Index of the current scan-matched lidar frame, used to name the per-iteration correspondence
+    // cloud dump directories (<mapFeatureSaveDirectory>/frame-<N>/iter-<M>.pcd).
+    int mapFeatureFrameIdx = 0;
+
+    bool lastPoseAffineAvailable;
 
     void setup_config();
     void initialize();
@@ -208,9 +226,16 @@ private:
     void updatePointAssociateToMap();
     void cornerOptimization();
     void surfOptimization();
+    // Diagnostic (frame-0 only): re-runs the surf association serially and dumps the transformed
+    // source points and their matched map neighbors so correspondences can be verified geometrically.
+    void dumpSurfMatches(int iterCount, const std::string& frameDir);
     void combineOptimizationCoeffs();
     bool LMOptimization(int iterCount);
     void scan2MapOptimization();
+    // Back-ends selected by config->useGtsamScanMatcher: the original hand-rolled GN/LM solver,
+    // or a GTSAM LevenbergMarquardtOptimizer over a single Pose3.
+    void scan2MapOptimizationCustom();
+    void scan2MapOptimizationGtsam();
     void transformUpdate();
     bool saveFrame();
     void addOdomFactor();

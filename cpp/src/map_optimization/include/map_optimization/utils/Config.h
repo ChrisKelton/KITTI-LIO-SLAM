@@ -20,6 +20,12 @@ public:
     std::string gpsTopic;
     bool savePCD;
     std::string savePCDDirectory;
+    // Per-iteration scan-matching correspondence cloud dump (debugging convergence). Each lidar
+    // frame writes <dir>/frame-<N>/iter-<M>.pcd. Defaults to $HOME/lio-sam/map-features.
+    std::string mapFeatureSaveDirectory;
+    // Selects the scan2MapOptimization back-end: true -> GTSAM LevenbergMarquardtOptimizer,
+    // false -> the original hand-rolled Gauss-Newton/Levenberg solver.
+    bool useGtsamScanMatcher;
     std::string odometryFrame;
     std::string lidarFrame;
 

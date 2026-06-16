@@ -162,9 +162,15 @@ sensor_msgs::msg::PointCloud2 publishCloud(
 inline Eigen::Affine3f getTransformation(const float x, const float y, const float z, const float roll, const float pitch, const float yaw) {
     Eigen::Affine3f trans = Eigen::Affine3f::Identity();
     trans.translation() << x, y, z;
-    trans.rotate(Eigen::AngleAxisf(roll, Eigen::Vector3f::UnitX()));
-    trans.rotate(Eigen::AngleAxisf(pitch, Eigen::Vector3f::UnitY()));
+    // Compose as Rz(yaw)·Ry(pitch)·Rx(roll) — the ZYX convention used by pcl::getTransformation,
+    // pcl::getTranslationAndEulerAngles, gtsam::Rot3::RzRyRx, and the analytic rotation Jacobian in
+    // LMOptimization. Eigen's rotate() post-multiplies, so rotating in Z, Y, X order yields Rz·Ry·Rx.
+    // The previous X,Y,Z order produced Rx·Ry·Rz, which disagreed with the Jacobian and the Euler
+    // read-backs, so scan-matching steps were computed for the wrong parameterization (cost increased
+    // every iteration, severe at the ~84 deg initial yaw).
     trans.rotate(Eigen::AngleAxisf(yaw, Eigen::Vector3f::UnitZ()));
+    trans.rotate(Eigen::AngleAxisf(pitch, Eigen::Vector3f::UnitY()));
+    trans.rotate(Eigen::AngleAxisf(roll, Eigen::Vector3f::UnitX()));
     return trans;
 }
 

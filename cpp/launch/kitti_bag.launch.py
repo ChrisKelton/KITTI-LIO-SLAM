@@ -109,7 +109,12 @@ IMU_PARAMS = {
 # iSAM2 back-end: scan-to-map optimization, key-frame factor graph, loop closure,
 # map save service. gpsTopic maps to LIO-SAM's "odometry/gpsz".
 MAP_OPTIMIZATION_PARAMS = {
-    'numberOfCores': 4,
+    # scan2MapOptimization dominates per-frame cost (~98%); its OpenMP loops scale
+    # near-linearly. Machine has 16 cores, so use 12 and leave headroom for the
+    # other nodes.
+    'numberOfCores': 12,
+    # Use the GTSAM LevenbergMarquardtOptimizer scan-matching back-end (vs the hand-rolled solver).
+    'useGtsamScanMatcher': True,
     # NOTE: publish_data.py emits NavSatFix on /oxts/gps, but the GPS handler here
     # subscribes to nav_msgs/Odometry. The GPS factor will not fire until a
     # navsat_transform-style bridge republishes GPS as Odometry on this topic.
@@ -220,7 +225,7 @@ def generate_launch_description():
         # world_tf_node,
         rviz_node,
         ExecuteProcess(
-            cmd=["ros2", "bag", "play", bag_file, "--loop", "-r", "1.0", "--clock"],
+            cmd=["ros2", "bag", "play", bag_file, "--loop", "-r", "0.1", "--clock"],
             output="screen"
         )
     ])

@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Status1
         - /cloud_deskewed1/Topic1
+        - /lio_sam/mapping/path1
         - /TF1
       Splitter Ratio: 0.5
     Tree Height: 598
@@ -27,7 +28,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: cloud_deskewed
+    SyncSource: map/local
 Visualization Manager:
   Class: ""
   Displays:
@@ -61,7 +62,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 0.9900000095367432
@@ -82,7 +83,7 @@ Visualization Manager:
         Value: /lio_sam/deskew/cloud_deskewed
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -95,10 +96,10 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.8899999856948853
+      Max Intensity: 0.8949999809265137
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: map/global
@@ -116,7 +117,7 @@ Visualization Manager:
         Value: /lio_sam/mapping/map_global
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -132,7 +133,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.9300000071525574
+      Max Intensity: 0.9900000095367432
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: map/local
@@ -163,10 +164,10 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0
+      Max Intensity: 20
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: map/trajectory
@@ -184,7 +185,7 @@ Visualization Manager:
         Value: /lio_sam/mapping/trajectory
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -197,7 +198,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: ""
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
@@ -218,7 +219,7 @@ Visualization Manager:
         Value: /points_raw
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -231,7 +232,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 0.9900000095367432
@@ -252,7 +253,7 @@ Visualization Manager:
         Value: /lio_sam/mapping/cloud_registered
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
@@ -284,7 +285,7 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
-      Color: 0; 85; 0
+      Color: 255; 85; 255
       Enabled: true
       Head Diameter: 0.30000001192092896
       Head Length: 0.20000000298023224
@@ -555,25 +556,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 100.05172729492188
+      Distance: 121.00309753417969
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -9.405818939208984
-        Y: 116.7214584350586
-        Z: 9.577666282653809
-      Focal Shape Fixed Size: true
+        X: -16.89389419555664
+        Y: -11.137514114379883
+        Z: -10.28510856628418
+      Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5695514678955078
-      Target Frame: path_camera_frame
+      Pitch: 0.7853981852531433
+      Target Frame: map
       Value: ThirdPersonFollower (rviz_default_plugins)
-      Yaw: -1.1996346712112427
+      Yaw: 0.7853981852531433
     Saved: ~
 Window Geometry:
   Displays:
@@ -591,5 +592,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1536
-  X: 8
-  Y: 31
+  X: 0
+  Y: 23
