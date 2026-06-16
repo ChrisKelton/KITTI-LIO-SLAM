@@ -261,25 +261,6 @@ void ImuPreintegrationNode::odometryHandler(const nav_msgs::msg::Odometry::Const
     prevBias_ = values_est.at<gtsam::imuBias::ConstantBias>(B(key));
     prevState_ = slam::State(prevPose_, prevVel_, prevBias_);
 
-    // Per-correction state logging. Prints the optimized velocity and bias every correction so we
-    // can tell whether divergence ramps (gradual accumulation -> tuning / observability issue) or
-    // jumps in a single step (bad lidar-pose correction leaking into the graph). vel/ba/bg norms
-    // mirror the thresholds in failureDetection(); pose translation lets us correlate an IMU blowup
-    // with a jump in the incoming lidar odometry.
-    {
-        const gtsam::Vector3 ba = prevBias_.accelerometer();
-        const gtsam::Vector3 bg = prevBias_.gyroscope();
-        const gtsam::Point3  p  = prevPose_.translation();
-        RCLCPP_INFO(this->get_logger(),
-            "Correction key=%d t=%.6f | pos=[%.2f %.2f %.2f] | vel=[%.3f %.3f %.3f] |v|=%.3f | "
-            "ba=[%.4f %.4f %.4f] |ba|=%.4f | bg=[%.4f %.4f %.4f] |bg|=%.4f",
-            key, currentCorrectionTime,
-            p.x(), p.y(), p.z(),
-            prevVel_.x(), prevVel_.y(), prevVel_.z(), prevVel_.norm(),
-            ba.x(), ba.y(), ba.z(), ba.norm(),
-            bg.x(), bg.y(), bg.z(), bg.norm());
-    }
-
     // Reset the optimization preintegration object
     preint_gtsam_opt->resetIntegrationAndSetBias(prevBias_);
     // check optimization

@@ -21,7 +21,6 @@ reconstructed here, matching what imageProjection expects.
 """
 
 import argparse
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -39,8 +38,8 @@ from tqdm import tqdm
 
 from inspect_data import OxtsDataTs, OxtsData
 
-RAW_DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data")
-OUTPUT_BAG_PATH: Path = Path("/home/ckelton/repos/misc/KITTI-LIO-SLAM/cpp/data")
+RAW_DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data/2011_09_26_drive_0005")
+OUTPUT_BAG_PATH: Path = Path(f"/home/ckelton/repos/misc/KITTI-LIO-SLAM/cpp/data/{RAW_DATA_PATH.stem}")
 
 # Velodyne HDL-64E geometry (KITTI): 64 beams spanning ~+2 deg (top) to ~-24.8 deg (bottom).
 # Used to reconstruct the per-point ring index, which KITTI does not store in the point files.

@@ -357,16 +357,6 @@ void ImageProjectionNode::imuDeskewInfo() {
         return;
 
     cloudInfo.imu_available = true;
-
-    // Initial orientation seed handed to map_optimization (updateInitialGuess first-frame branch and
-    // the imu_available rotation branch). For a KITTI vehicle on flat ground these should be within a
-    // few degrees of zero for roll/pitch; large or drifting values indicate the OXTS->IMU orientation
-    // (extQRPY / publish-script quaternion convention) is the source of the z-sink at frame 0.
-    RCLCPP_INFO(this->get_logger(),
-        "imu init (deg): roll=%.3f pitch=%.3f yaw=%.3f",
-        cloudInfo.imu_roll_init  * 180.0 / M_PI,
-        cloudInfo.imu_pitch_init * 180.0 / M_PI,
-        cloudInfo.imu_yaw_init   * 180.0 / M_PI);
 }
 
 void ImageProjectionNode::odomDeskewInfo() {
@@ -481,7 +471,7 @@ void ImageProjectionNode::projectPointCloud() {
         if (range < config->lidarMinRange || range > config->lidarMaxRange)
             continue;
 
-        const int rowIdn = laserCloudIn->points[i].ring;
+        const int rowIdn = `laserCloudIn->points[i].ring;
         if (rowIdn < 0 || rowIdn >= config->N_SCAN)
             continue;
 

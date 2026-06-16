@@ -195,10 +195,6 @@ private:
     // inter-frame dt. -1 until the first motion-model step.
     double lastMotionTime = -1.0;
 
-    // Index of the current scan-matched lidar frame, used to name the per-iteration correspondence
-    // cloud dump directories (<mapFeatureSaveDirectory>/frame-<N>/iter-<M>.pcd).
-    int mapFeatureFrameIdx = 0;
-
     bool lastPoseAffineAvailable;
 
     void setup_config();
@@ -226,9 +222,6 @@ private:
     void updatePointAssociateToMap();
     void cornerOptimization();
     void surfOptimization();
-    // Diagnostic (frame-0 only): re-runs the surf association serially and dumps the transformed
-    // source points and their matched map neighbors so correspondences can be verified geometrically.
-    void dumpSurfMatches(int iterCount, const std::string& frameDir);
     void combineOptimizationCoeffs();
     bool LMOptimization(int iterCount);
     void scan2MapOptimization();

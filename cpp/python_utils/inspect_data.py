@@ -10,7 +10,7 @@ import pandas as pd
 from shapely import Polygon, LineString
 from tqdm import tqdm
 
-DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data/2011_09_26_drive_0022")
+DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data/2011_09_29_drive_0071")
 CALIB_PATH = DATA_PATH / "calib"
 SYNC_PATH = DATA_PATH / "sync"
 UNSYNC_PATH = DATA_PATH / "unsync"
@@ -25,12 +25,10 @@ def save_lines_func(line: LineString) -> LineString:
     return LineString(np.column_stack(line.xy).dot([[1, 0], [0, -1]]))
 
 
-def polygons_to_gpkg(polys: list[Polygon], outpath: Path, func: Optional[Callable] = None):
-    if func is None:
-        func = lambda x: x
+def polygons_to_gpkg(polys: list[Polygon], outpath: Path):
     gdf = gpd.GeoDataFrame(
         {'name': [str(idx) for idx in range(len(polys))]},
-        geometry=list(map(func, polys)),
+        geometry=list(map(save_polygons_func, polys)),
         crs=None,
     )
     gdf.to_file(outpath, driver="GPKG")
@@ -39,14 +37,11 @@ def polygons_to_gpkg(polys: list[Polygon], outpath: Path, func: Optional[Callabl
 def lines_to_gpkg(
     lines: list[LineString],
     outpath: Path,
-    func: Optional[Callable] = None,
     crs: Optional[str] = None,
 ):
-    if func is None:
-        func = lambda x: x
     gdf = gpd.GeoDataFrame(
         {'name': [str(idx) for idx in range(len(lines))]},
-        geometry=list(map(func, lines)),
+        geometry=list(map(save_lines_func, lines)),
         crs=crs,
     )
     gdf.to_file(outpath, driver="GPKG")
@@ -460,7 +455,7 @@ def ingest_oxts_data(oxts_dir: Path, out_plots_dir: Optional[Path] = None) -> pd
             continue
 
         linestrings.append(LineString([(lat0, lon0), (lat1, lon1)]))
-    lines_to_gpkg(linestrings, outpath=out_plots_dir / "latlon.gpkg", func=save_lines_func, crs="EPSG:4326")
+    lines_to_gpkg(linestrings, outpath=out_plots_dir / "latlon.gpkg", crs="EPSG:4326")
 
     return oxts_df
 
