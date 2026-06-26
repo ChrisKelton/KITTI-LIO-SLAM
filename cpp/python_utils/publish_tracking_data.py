@@ -34,11 +34,13 @@ from navpy import lla2ned
 from rclpy.serialization import serialize_message
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import Imu, PointCloud2, PointField
+from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
 from tqdm import tqdm
 
 from inspect_data import OxtsDataTs, OxtsData
+from inspect_tracking_data import extract_tracking_labels, load_calib_txt_file, convert_labels_from_cam_to_velo_coordinates
 
-RAW_DATA_PATH: Path = Path("/home/ckelton/data/KITTI/raw_data/2011_09_26_drive_0022")
+TRACKING_DATA_PATH: Path = Path("/home/ckelton/data/KITTI/tracking")
 OUTPUT_BAG_PATH: Path = Path(f"/home/ckelton/repos/misc/KITTI-LIO-SLAM/cpp/data")
 
 # Velodyne HDL-64E geometry (KITTI): 64 beams spanning ~+2 deg (top) to ~-24.8 deg (bottom).
@@ -53,9 +55,12 @@ TOPIC_POINTS: str = "/points_raw"
 TOPIC_GPS: str = "/odometry/gps"
 TOPIC_GT_POSE: str = "/ground_truth/pose"
 TOPIC_GT_PATH: str = "/ground_truth/path"
+TOPIC_DET3D: str = "/detections3d"
 
 # Frame the ground truth path/pose is expressed in (the SLAM map frame, so it overlays in RViz).
 GT_FRAME: str = "map"
+LABEL_CLASSES: list[str] = ["car", "pedestrian"]
+LABEL_CLASSES = [str_.lower() for str_ in LABEL_CLASSES]
 
 
 def to_ros_time_from_pd(ts_sec: pd.Timestamp) -> RosTime:
@@ -81,15 +86,26 @@ def get_singular_dir(dirs_: list[Path], raise_error: bool = False, error_desc: s
 class KittiBagWriter:
     OXTS_DATA_KIND: str = "oxts"
     VELO_DATA_KIND: str = "velodyne"
+    LABELS_DATA_KIND: str = "labels"
     DATA_KINDS: list[str] = [OXTS_DATA_KIND, VELO_DATA_KIND]
 
     def __init__(
         self,
         data_path: Path,
-        use_sync: bool = False,
         write_ground_truth: bool = True,
         data_to_skip: Optional[str | list[str]] = None,
+        split: str = "training",
+        sequence_number: int = 0,
+        msg_frequency_hz: float = 10.0,
     ):
+        if split not in ["training", "testing"]:
+            raise ValueError(f"'split' must be in ['training', 'testing']. Got '{split}'")
+        self.split = split
+        if sequence_number < 0 or sequence_number > 20:
+            raise ValueError(f"'sequence_number' must be in [0, 20]. Got '{sequence_number}'")
+        self.sequence = sequence_number
+        self.msg_frequency_hz = msg_frequency_hz
+
         self.data_path = data_path
         self.write_ground_truth = write_ground_truth
 
@@ -104,22 +120,23 @@ class KittiBagWriter:
             data_to_skip = []
         self.data_to_skip = data_to_skip
 
-        subset = "sync" if use_sync else "unsync"
-        main_data_path = get_singular_dir(
-            sorted(data_path.glob(f"**/{subset}")), raise_error=True, error_desc=f"'{data_path}/**/{subset}'")
-        if not main_data_path.exists():
-            raise RuntimeError(f"{subset} data not found at '{main_data_path}'")
-
+        main_data_path = data_path
         self.oxts_dir = get_singular_dir(
-            sorted(main_data_path.glob("**/oxts")),
+            sorted(main_data_path.glob(f"**/oxts/{split}")),
             raise_error=True if self.use_oxts_data or self.write_ground_truth else False,
-            error_desc=f"'{main_data_path}/**/oxts'",
+            error_desc=f"'{main_data_path}/**/oxts/{split}'",
         )
         self.velodyne_pts_dir = None
         if self.use_velo_data:
             self.velodyne_pts_dir = get_singular_dir(
-                sorted(main_data_path.glob("**/velodyne_points")), raise_error=True,
-                error_desc=f"'{main_data_path}/**/velodyne_points'")
+                sorted(main_data_path.glob(f"**/velodyne/{split}")), raise_error=True,
+                error_desc=f"'{main_data_path}/**/velodyne/{split}'")
+        self.labels_dir = None
+        if self.use_labels_data:
+            self.labels_dir = get_singular_dir(
+                sorted(main_data_path.glob(f"**/labels/{split}")), raise_error=True,
+                       error_desc=f"'{main_data_path}/**/labels/{split}'")
+        self.calib_dir = get_singular_dir(sorted(main_data_path.glob(f"**/calib/{split}")), raise_error=False)
 
         self._load()
         if self.oxts_df is not None:
@@ -142,12 +159,29 @@ class KittiBagWriter:
     def use_velo_data(self) -> bool:
         return self.VELO_DATA_KIND not in self.data_to_skip
 
+    @property
+    def use_labels_data(self) -> bool:
+        return self.LABELS_DATA_KIND not in self.data_to_skip
+
+    @property
+    def sequence_str(self) -> str:
+        return f"{self.sequence:04d}"
+
+    @property
+    def msg_frequency_s(self) -> float:
+        return 1.0 / self.msg_frequency_hz
+
+    @staticmethod
+    def generate_spaced_timestamps(range_: int, frequency_s: float) -> list[pd.Timestamp]:
+        return [pd.Timestamp(idx * frequency_s, unit='s') for idx in range(range_)]
+
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
     def _load(self) -> None:
         print("Loading KITTI data...")
 
+        use_artificial_ts: bool = False
         self.oxts_df = None
         if self.write_ground_truth or self.VELO_DATA_KIND not in self.data_to_skip:
             # OXTS (IMU + GPS + ground truth)
@@ -155,13 +189,26 @@ class KittiBagWriter:
             dataformat_path = get_singular_dir(sorted(self.oxts_dir.glob("**/dataformat.txt")), raise_error=True)
             with open(str(dataformat_path), "r") as f:
                 data_keys = [line.strip("\n").split(":")[0] for line in f.readlines()]
-            oxts_ts_path = get_singular_dir(sorted(self.oxts_dir.glob("**/timestamps.txt")), raise_error=True)
-            with open(str(oxts_ts_path), "r") as f:
-                timestamps = [pd.Timestamp(line.strip("\n")) for line in f.readlines()]
-            oxts_data_dir = get_singular_dir(sorted(self.oxts_dir.glob("**/data")), raise_error=True)
-            for ts, data_txt_file in tqdm(
-                    zip(timestamps, sorted(oxts_data_dir.glob("**/*.txt"))), desc="OXTS", total=len(timestamps)):
-                oxts_data = OxtsDataTs.from_txt_file(data_txt_file, data_keys, ts)
+
+            oxts_data_dir = get_singular_dir(sorted(self.oxts_dir.glob("**/oxts")), raise_error=True)
+            oxts_sequence_txtpath = sorted(oxts_data_dir.glob(f"**/{self.sequence_str}.txt"))
+            if len(oxts_sequence_txtpath) != 1:
+                raise ValueError(f"Found not just 1 sequence txtpath '{oxts_sequence_txtpath}'")
+            oxts_sequence_txtpath = oxts_sequence_txtpath[0]
+            oxts_data_unprocessed: list[str] = []
+            with open(str(oxts_sequence_txtpath), 'r') as f:
+                oxts_data_unprocessed = [line.strip("\n").strip(" ") for line in f.readlines()]
+
+            oxts_ts_path = get_singular_dir(sorted(self.oxts_dir.glob("**/timestamps.txt")), raise_error=False)
+            if oxts_ts_path is not None:
+                with open(str(oxts_ts_path), "r") as f:
+                    timestamps = [pd.Timestamp(line.strip("\n")) for line in f.readlines()]
+            else:
+                use_artificial_ts = True
+                timestamps = self.generate_spaced_timestamps(len(oxts_data_unprocessed), self.msg_frequency_s)
+
+            for ts, unprocessed_data in tqdm(zip(timestamps, oxts_data_unprocessed), desc="OXTS", total=len(timestamps)):
+                oxts_data = OxtsDataTs.from_str(unprocessed_data, data_keys, ts)
                 self.oxts_df.loc[len(self.oxts_df)] = oxts_data.to_pandas_series()
             self.oxts_df.sort_values(by=["ts"], inplace=True)
 
@@ -171,30 +218,79 @@ class KittiBagWriter:
         self.velodyne_ts_end: list[pd.Timestamp] = []
         if self.use_velo_data:
             # Velodyne: store file paths + sweep timestamps (lazy-read in the write loop).
-
-            def _read_ts(name: str) -> list[pd.Timestamp]:
-                path = get_singular_dir(sorted(self.velodyne_pts_dir.glob(f"**/{name}")), raise_error=True)
-                with open(str(path), "r") as f:
-                    return [pd.Timestamp(line.strip("\n")) for line in f.readlines()]
-
-            timestamps = _read_ts("timestamps.txt")
-            timestamps_start = _read_ts("timestamps_start.txt")
-            timestamps_end = _read_ts("timestamps_end.txt")
-            velodyne_data_dir = get_singular_dir(sorted(self.velodyne_pts_dir.glob("**/data")), raise_error=True)
+            velodyne_data_dir = get_singular_dir(sorted(self.velodyne_pts_dir.glob(f"**/velodyne/{self.sequence_str}")), raise_error=True)
             # 'sync' KITTI stores velodyne as float32 .bin; 'extract'/unsync stores it as text .txt.
             velodyne_files = sorted(velodyne_data_dir.glob("**/*.bin")) or sorted(velodyne_data_dir.glob("**/*.txt"))
+
+            if use_artificial_ts:
+                timestamps = self.generate_spaced_timestamps(len(velodyne_files), self.msg_frequency_s)
+                timestamps_end = timestamps_start = timestamps
+            else:
+                def _read_ts(name: str) -> list[pd.Timestamp]:
+                    path = get_singular_dir(sorted(self.velodyne_pts_dir.glob(f"**/{name}")), raise_error=False)
+                    with open(str(path), "r") as f:
+                        return [pd.Timestamp(line.strip("\n")) for line in f.readlines()]
+
+                timestamps = _read_ts("timestamps.txt")
+                timestamps_start = _read_ts("timestamps_start.txt")
+                timestamps_end = _read_ts("timestamps_end.txt")
+
             for ts, ts_start, ts_end, velo_file in zip(timestamps, timestamps_start, timestamps_end, velodyne_files):
                 self.velodyne_data.append(velo_file)
                 self.velodyne_ts.append(ts)
                 self.velodyne_ts_start.append(ts_start)
                 self.velodyne_ts_end.append(ts_end)
 
+        self.cam_to_velo: Optional[np.ndarray] = None
+        self.label_data: Optional[pd.DataFrame] = None
+        if self.use_labels_data:
+            labels_data_dir = get_singular_dir(sorted(self.labels_dir.glob(f"**/label*")), raise_error=True)
+            labels_sequence_path = labels_data_dir / f"{self.sequence_str}.txt"
+            self.label_data = extract_tracking_labels(labels_sequence_path, LABEL_CLASSES)
+
+            if self.calib_dir is not None:
+                calib_data_dir = get_singular_dir(sorted(self.calib_dir.glob(f"**/calib")), raise_error=False)
+                if calib_data_dir is not None:
+                    calib_sequence_path = calib_data_dir / f"{self.sequence_str}.txt"
+                    if calib_sequence_path.exists():
+                        calibration_mats = load_calib_txt_file(calib_sequence_path)
+                        T = calibration_mats.get("Tr_velo_cam")
+                        if T.shape != (3, 4):
+                            print(f"Unexpected shape for 'Tr_velo_cam' matrix shape '{T.shape}'. Expected '(3, 4)'. Skipping coordinate transformation from camera -> velodyne.")
+                        elif T is None:
+                            print(f"No 'Tr_velo_cam' matrix found at sequence '{self.calib_dir}'. Got the following calibration types: '{list(calibration_mats.keys())}'")
+                        else:
+                            R_rect = calibration_mats.get("R_rect")
+                            if R_rect is None:
+                                print(f"No 'R_rect' matrix found at sequence '{self.calib_dir}'. Assuming 'Tr_velo_cam' matrix encompasses full transformation from camera to velodyne coordinate frame.")
+                            else:
+                                T = R_rect @ T
+                            R = T[:3, :3]
+                            t = T[:3, 3]
+                            R_inv = R.T
+                            t_inv = R_inv @ -t
+                            self.cam_to_velo = np.column_stack([R_inv, t_inv])
+                    else:
+                        print(f"No calibration data found at sequence '{self.calib_dir}'. Assuming 3D Detection data is in velodyne frame coordinates already.")
+                else:
+                    print(f"No calibration data found at '{self.calib_dir}'. Assuming 3D Detection data is in velodyne frame coordinates already.")
+            else:
+                print("No calibration data found. Assuming 3D Detection data is in velodyne frame coordinates already.")
+
+            if self.cam_to_velo is not None:
+                self.label_data = convert_labels_from_cam_to_velo_coordinates(self.label_data, self.cam_to_velo)
+
     def _build_timeline(self) -> None:
         oxts_df = self.oxts_df if self.use_oxts_data else []
-        events = (
+        events: list[tuple[int, str, int | list[int]]] = (
             [(int(oxts_df.iloc[i]["ts"]), "oxts", i) for i in range(len(oxts_df))] +
             [(ts.value, "velodyne", i) for i, ts in enumerate(self.velodyne_ts)]
         )
+        if self.use_labels_data:
+            for frame_id in np.unique(self.label_data["frame"]):
+                rows = self.label_data.loc[self.label_data["frame"] == frame_id]
+                events_idx = list(rows.index)
+                events.append((pd.Timestamp(frame_id * self.msg_frequency_s, unit='s').value, "label", events_idx))
         if self.write_ground_truth:
             events += [(int(self.oxts_df.iloc[i]["ts"]), "gt", i) for i in range(len(self.oxts_df))]
         events.sort(key=lambda e: e[0])
@@ -357,6 +453,44 @@ class KittiBagWriter:
             float(q[0]), float(q[1]), float(q[2]), float(q[3]))
         return msg
 
+    def _3d_detection_msg(self, idx: int, stamp: RosTime) -> Detection3D:
+        label = self.label_data.iloc[idx]
+
+        detection = Detection3D()
+        detection.header.stamp = stamp
+        detection.header.frame_id = "detection"
+
+        hypothesis = ObjectHypothesisWithPose()
+        hypothesis.hypothesis.class_id = label.type
+        # TODO: Maybe add some randomness to the probability score
+        hypothesis.hypothesis.score = 1.0
+        detection.results.append(hypothesis)
+
+        detection.bbox.center.position.x = label.x
+        detection.bbox.center.position.y = label.y
+        detection.bbox.center.position.z = label.z
+
+        # TODO: Add orientation
+        detection.bbox.center.orientation.x = 0.0
+        detection.bbox.center.orientation.y = 0.0
+        detection.bbox.center.orientation.z = 0.0
+        detection.bbox.center.orientation.w = 1.0  # Facing straight forward
+
+        detection.bbox.size.x = label.width
+        detection.bbox.size.y = label.length
+        detection.bbox.size.z = label.height
+
+        return detection
+
+    def _3d_detection_array_msg(self, idxs: list[int], stamp: RosTime) -> Detection3DArray:
+        msg = Detection3DArray()
+        msg.header.stamp = stamp
+        msg.header.frame_id = "detections"
+
+        for idx in idxs:
+            msg.detections.append(self._3d_detection_msg(idx, stamp))
+        return msg
+
     # ------------------------------------------------------------------
     # Bag writing
     # ------------------------------------------------------------------
@@ -374,6 +508,7 @@ class KittiBagWriter:
             (TOPIC_IMU, "sensor_msgs/msg/Imu"),
             (TOPIC_POINTS, "sensor_msgs/msg/PointCloud2"),
             (TOPIC_GPS, "nav_msgs/msg/Odometry"),
+            (TOPIC_DET3D, "detections3d"),
         ]
         if self.write_ground_truth:
             topics += [(TOPIC_GT_POSE, "geometry_msgs/msg/PoseStamped"),
@@ -396,6 +531,9 @@ class KittiBagWriter:
                 pose = self._gt_pose_msg(i, stamp)
                 writer.write(TOPIC_GT_POSE, serialize_message(pose), ns)
                 self._gt_path.poses.append(pose)
+            elif kind == "label":
+                detections = self._3d_detection_array_msg(i, stamp)
+                writer.write(TOPIC_DET3D, serialize_message(detections), ns)
 
         # Write the complete ground-truth path once, at the final timestamp.
         if self.write_ground_truth and self._gt_path.poses:
@@ -410,12 +548,10 @@ class KittiBagWriter:
 
 def main():
     parser = argparse.ArgumentParser(description="Write KITTI data to a rosbag2 bag for offline SLAM playback")
-    parser.add_argument("--data", default=str(RAW_DATA_PATH),
-                        help="Path to the raw KITTI dataset (containing 'calib', 'sync'/'unsync', ...)")
+    parser.add_argument("--data", default=str(TRACKING_DATA_PATH),
+                        help="Path to the tracking KITTI dataset")
     parser.add_argument("--output", default=None,
                         help="Output bag directory (default: ./<dataset_name>_bag)")
-    parser.add_argument("--use-sync", action="store_true",
-                        help="Use the synchronized data instead of the unsynchronized 'extract' data")
     parser.add_argument("--storage-id", default="sqlite3", choices=["sqlite3", "mcap"],
                         help="rosbag2 storage backend")
     parser.add_argument("--no-ground-truth", action="store_true",
@@ -428,7 +564,6 @@ def main():
 
     writer = KittiBagWriter(
         data_path=data_path,
-        use_sync=args.use_sync,
         write_ground_truth=not args.no_ground_truth,
         data_to_skip=args.data_to_skip,
     )

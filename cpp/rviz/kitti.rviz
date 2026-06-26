@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Status1
         - /cloud_deskewed1/Topic1
+        - /map/local1
         - /lio_sam/mapping/path1
         - /TF1
       Splitter Ratio: 0.5
@@ -99,14 +100,14 @@ Visualization Manager:
       Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.8949999809265137
+      Max Intensity: 0.9900000095367432
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: map/global
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.20000000298023224
       Style: Flat Squares
       Topic:
         Depth: 5
@@ -140,7 +141,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.20000000298023224
       Style: Flat Squares
       Topic:
         Depth: 5
@@ -556,25 +557,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 121.00309753417969
+      Distance: 97.96636962890625
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -16.89389419555664
-        Y: -11.137514114379883
-        Z: -10.28510856628418
+        X: 4.8942389488220215
+        Y: 45.46870040893555
+        Z: -0.6624990105628967
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7853981852531433
+      Pitch: 0.41539788246154785
       Target Frame: map
       Value: ThirdPersonFollower (rviz_default_plugins)
-      Yaw: 0.7853981852531433
+      Yaw: 0.08539624512195587
     Saved: ~
 Window Geometry:
   Displays:

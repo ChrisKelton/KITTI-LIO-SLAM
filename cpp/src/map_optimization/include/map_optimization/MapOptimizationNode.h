@@ -83,7 +83,6 @@ private:
     // gtsam
     gtsam::NonlinearFactorGraph graph;
     gtsam::Values initialEstimate;
-    gtsam::Values optimizedEstimate;
     gtsam::ISAM2* isam2;
     gtsam::Values isamCurrentEstimate;
     Eigen::MatrixXd poseCovariance;

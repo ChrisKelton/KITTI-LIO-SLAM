@@ -355,8 +355,8 @@ void MapOptimizationNode::visualizeGlobalMapThread() {
 }
 
 void MapOptimizationNode::publishGlobalMap() {
-    if (pubLaserCloudSurround->get_subscription_count() == 0)
-        return;
+    // if (pubLaserCloudSurround->get_subscription_count() == 0)
+    //     return;
 
     if (cloudKeyPoses3D->points.empty())
         return;
@@ -394,6 +394,7 @@ void MapOptimizationNode::publishGlobalMap() {
     for (int i = 0; i < static_cast<int>(globalMapKeyPosesDs->size()); ++i) {
         if (pointDistance(globalMapKeyPosesDs->points[i], cloudKeyPoses3D->back()) > config->globalMapVisualizationSearchRadius)
             continue;
+        // thisKeyInd is a key indicating which pose we will use to transform the points at that key
         int thisKeyInd = static_cast<int>(globalMapKeyPosesDs->points[i].intensity);
         *globalMapKeyFrames += *transformPointCloud<PointType, PointTypePose>(cornerCloudKeyFrames[thisKeyInd], &cloudKeyPoses6D->points[thisKeyInd], config->numberOfCores);
         *globalMapKeyFrames += *transformPointCloud<PointType, PointTypePose>(surfCloudKeyFrames[thisKeyInd], &cloudKeyPoses6D->points[thisKeyInd], config->numberOfCores);
@@ -1589,7 +1590,7 @@ void MapOptimizationNode::saveKeyFramesAndFactor() {
     cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
     surfCloudKeyFrames.push_back(thisSurfKeyFrame);
 
-    // save path for viauzliation
+    // save path for visualization
     updatePath(thisPose6D);
 }
 

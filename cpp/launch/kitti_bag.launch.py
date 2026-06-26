@@ -65,6 +65,7 @@ IMAGE_PROJECTION_PARAMS = {
     'extRotV': EXTRINSICS['extRotV'],
     'extRotRPYV': EXTRINSICS['extRotRPYV'],
     'lidarCurvatureFeatureExtractionNeighbors': CURVATURE_NEIGHBORS,
+    'requireImu': True,
 }
 
 # LOAM feature extraction: subscribes the deskewed cloud_info, publishes corner /
@@ -114,7 +115,7 @@ MAP_OPTIMIZATION_PARAMS = {
     # other nodes.
     'numberOfCores': 12,
     # Use the GTSAM LevenbergMarquardtOptimizer scan-matching back-end (vs the hand-rolled solver).
-    'useGtsamScanMatcher': True,
+    'useGtsamScanMatcher': False,
     # NOTE: publish_data.py emits NavSatFix on /oxts/gps, but the GPS handler here
     # subscribes to nav_msgs/Odometry. The GPS factor will not fire until a
     # navsat_transform-style bridge republishes GPS as Odometry on this topic.
@@ -160,9 +161,18 @@ MAP_OPTIMIZATION_PARAMS = {
     'rotation_tolerance': 1000.0,
 }
 
+TRACKING_PARAMS = {
+    'maxMissedFrames': 5,
+    'priorNoise': 1.0,
+    'measNoise': 0.2,
+    'dataAssociationCostFlag': 0,
+    'dataAssociationGateTh': 3.0,
+}
 
 def generate_launch_description():
-    bag_file = str(Path(WS_ROOT) / f"data/raw_data_bag")
+    # bag_file = str(Path(WS_ROOT) / "data/2011_09_26_drive_0022_bag")
+    # bag_file = str(Path(WS_ROOT) / "data/raw_data_bag")
+    bag_file = str(Path(WS_ROOT) / "data/tracking_bag")
 
     # Node names are omitted so the `/**` parameter wildcard applies cleanly; in
     # particular the imu process hosts two nodes and must not be force-renamed.
@@ -194,6 +204,13 @@ def generate_launch_description():
         output='screen',
     )
 
+    tracking_node = Node(
+        package='tracking',
+        executable='tracking',
+        parameters=[TRACKING_PARAMS],
+        output='screen',
+    )
+
     # NOTE: the previous `world -> feature_extraction` static transform was a
     # leftover (its child is a node name, not a frame). LIO-SAM publishes map->odom
     # and odom->base_link dynamically from the imu/map_optimization nodes, so no
@@ -222,10 +239,12 @@ def generate_launch_description():
         feature_extraction_node,
         imu_node,
         map_optimization_node,
+        tracking_node,
         # world_tf_node,
         rviz_node,
         ExecuteProcess(
-            cmd=["ros2", "bag", "play", bag_file, "--loop", "-r", "0.1", "--clock"],
+            # cmd=["ros2", "bag", "play", bag_file, "--clock"],
+            cmd=["ros2", "bag", "play", bag_file],
             output="screen"
         )
     ])

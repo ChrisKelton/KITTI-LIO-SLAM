@@ -313,18 +313,22 @@ class OxtsDataTs:
     data: OxtsData
 
     @classmethod
-    def from_txt_file(cls, txt_file_path: Path, keys: list[str], ts: str | pd.Timestamp) -> "OxtsDataTs":
-        with open(str(txt_file_path), 'r') as f:
-            lines = [line.strip("\n") for line in f.readlines()]
-        if len(lines) > 1:
-            raise NotImplementedError(f"Multiple lines of data found in '{txt_file_path}'.")
+    def from_str(cls, str_: str, keys: list[str], ts: str | pd.Timestamp, delimiter: str = " ") -> "OxtsDataTs":
         data_dict: dict[str, float] = {}
-        for idx, val in enumerate(lines[0].split(" ")):
+        for idx, val in enumerate(str_.split(delimiter)):
             data_dict[keys[idx]] = float(val)
         return cls(
             ts=ts,
             data=OxtsData(**data_dict),
         )
+
+    @classmethod
+    def from_txt_file(cls, txt_file_path: Path, keys: list[str], ts: str | pd.Timestamp) -> "OxtsDataTs":
+        with open(str(txt_file_path), 'r') as f:
+            lines = [line.strip("\n") for line in f.readlines()]
+        if len(lines) > 1:
+            raise NotImplementedError(f"Multiple lines of data found in '{txt_file_path}'.")
+        return cls.from_str(str_=lines[0], keys=keys, ts=ts)
 
     def to_pandas_series(self) -> pd.Series:
         return pd.Series(

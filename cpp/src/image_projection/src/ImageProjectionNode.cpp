@@ -108,6 +108,8 @@ void ImageProjectionNode::setup_config() {
     // Must match the value used in featureExtraction for curvature computation.
     config->lidarCurvatureFeatureExtractionNeighbors =
         this->declare_parameter<int>("lidarCurvatureFeatureExtractionNeighbors", 5);
+
+    config->requireImu = this->declare_parameter("requireImu", true);
 }
 
 void ImageProjectionNode::setup_subpub() {
@@ -289,9 +291,9 @@ bool ImageProjectionNode::deskewInfo() {
     // When the IMU data is entirely inside the scan window; i.e., `front() >= timeScanCur` && `back() < timeScanEnd`
     // we have the worst case. We would have no IMU coverage at either boundary of the scan where you need it most
     // for distortion correction.
-    if (imuQueue.empty()
+    if (config->requireImu && (imuQueue.empty()
         || ROS_TIME(imuQueue.front()) > timeScanCur
-        || ROS_TIME(imuQueue.back())  < timeScanEnd)
+        || ROS_TIME(imuQueue.back())  < timeScanEnd))
     {
         RCLCPP_DEBUG(this->get_logger(), "Waiting for IMU data...");
         return false;
@@ -471,7 +473,7 @@ void ImageProjectionNode::projectPointCloud() {
         if (range < config->lidarMinRange || range > config->lidarMaxRange)
             continue;
 
-        const int rowIdn = `laserCloudIn->points[i].ring;
+        const int rowIdn = laserCloudIn->points[i].ring;
         if (rowIdn < 0 || rowIdn >= config->N_SCAN)
             continue;
 

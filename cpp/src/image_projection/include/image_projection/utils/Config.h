@@ -37,6 +37,8 @@ public:
     float lidarMaxRange;
     int downsampleRate;
     int lidarCurvatureFeatureExtractionNeighbors;
+
+    bool requireImu;
 };
 
 #endif //KITTI_LIO_SLAM_CONFIG_H
